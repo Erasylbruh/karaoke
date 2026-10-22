@@ -7,7 +7,7 @@ import {
   Video, 
   ShieldCheck, 
   Loader2, 
-  FileImage
+  FileImage 
 } from 'lucide-react';
 import { Karaoke } from '@/lib/types';
 import { synthPlayer } from '@/lib/audio-synthesizer';
@@ -16,23 +16,29 @@ interface VideoDownloaderModalProps {
   karaoke: Karaoke;
   isOpen: boolean;
   onClose: () => void;
+  initialFormat?: 'reel' | 'landscape';
 }
 
 export default function VideoDownloaderModal({
   karaoke,
   isOpen,
   onClose,
+  initialFormat = 'reel',
 }: VideoDownloaderModalProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [progress, setProgress] = useState(0);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [recordingStatus, setRecordingStatus] = useState<string>('Готов к записи');
-  const [aspectRatio, setAspectRatio] = useState<'reel' | 'landscape'>('reel');
+  const [aspectRatio, setAspectRatio] = useState<'reel' | 'landscape'>(initialFormat);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const animationFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setAspectRatio(initialFormat);
+  }, [initialFormat]);
 
   useEffect(() => {
     return () => {
@@ -49,44 +55,49 @@ export default function VideoDownloaderModal({
   const drawFrame = (ctx: CanvasRenderingContext2D, elapsedSec: number) => {
     ctx.clearRect(0, 0, width, height);
 
-    // 1. Clean Minimalist Background
-    const grad = ctx.createLinearGradient(0, 0, width, height);
-    grad.addColorStop(0, '#09090b');
-    grad.addColorStop(1, '#18181b');
+    // 1. Background color from track
+    const bgColor = karaoke.style?.backgroundColor || '#1d1b3a';
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, width, height);
+
+    // Subtle dark gradient overlay
+    const grad = ctx.createLinearGradient(0, 0, 0, height);
+    grad.addColorStop(0, 'rgba(0,0,0,0.2)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.6)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, width, height);
 
     // 2. Song Header
     ctx.fillStyle = '#f4f4f5';
-    ctx.font = `bold ${aspectRatio === 'reel' ? 34 : 28}px sans-serif`;
+    ctx.font = `700 ${aspectRatio === 'reel' ? 36 : 28}px "Unbounded", "Onest", sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillText(karaoke.title, width / 2, aspectRatio === 'reel' ? 120 : 70);
 
     ctx.fillStyle = '#a1a1aa';
-    ctx.font = `500 ${aspectRatio === 'reel' ? 22 : 18}px sans-serif`;
+    ctx.font = `500 ${aspectRatio === 'reel' ? 22 : 18}px "Onest", sans-serif`;
     ctx.fillText(karaoke.artist, width / 2, aspectRatio === 'reel' ? 165 : 100);
 
-    // 3. Spotify Lyrics Animation
+    // 3. Synced Lyrics
     const activeIdx = karaoke.lyrics.reduce((acc, line, idx) => {
       return elapsedSec >= line.time ? idx : acc;
     }, -1);
 
     const centerY = aspectRatio === 'reel' ? height / 2 : height / 2 + 30;
-    const lineHeight = aspectRatio === 'reel' ? 72 : 58;
+    const lineHeight = aspectRatio === 'reel' ? 76 : 60;
 
     karaoke.lyrics.forEach((line, idx) => {
       const distance = idx - activeIdx;
       const y = centerY + distance * lineHeight;
 
-      if (y > 220 && y < height - 190) {
+      if (y > 200 && y < height - 180) {
         const isActive = idx === activeIdx;
 
         if (isActive) {
-          ctx.fillStyle = karaoke.style.activeColor || '#22c55e';
-          ctx.font = `700 ${aspectRatio === 'reel' ? 40 : 32}px sans-serif`;
+          ctx.fillStyle = karaoke.style?.activeColor || '#ffb547';
+          ctx.font = `700 ${aspectRatio === 'reel' ? 42 : 34}px "Onest", sans-serif`;
         } else {
-          ctx.fillStyle = '#71717a';
-          ctx.font = `500 ${aspectRatio === 'reel' ? 30 : 24}px sans-serif`;
+          ctx.fillStyle = 'rgba(244, 244, 245, 0.35)';
+          ctx.font = `600 ${aspectRatio === 'reel' ? 32 : 26}px "Onest", sans-serif`;
         }
 
         ctx.textAlign = 'center';
@@ -95,39 +106,39 @@ export default function VideoDownloaderModal({
     });
 
     // 4. Progress bar line at bottom
-    const progressPercent = Math.min(1, elapsedSec / (karaoke.duration || 60));
+    const progressPercent = Math.min(1, elapsedSec / (karaoke.duration || 40));
     const barWidth = width * 0.7;
     const barX = (width - barWidth) / 2;
-    const barY = height - 110;
+    const barY = height - 100;
 
-    ctx.fillStyle = '#27272a';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
     ctx.beginPath();
     ctx.roundRect(barX, barY, barWidth, 4, 2);
     ctx.fill();
 
-    ctx.fillStyle = karaoke.style.activeColor || '#22c55e';
+    ctx.fillStyle = karaoke.style?.activeColor || '#ffb547';
     ctx.beginPath();
     ctx.roundRect(barX, barY, barWidth * progressPercent, 4, 2);
     ctx.fill();
 
-    // 5. MANDATORY WATERMARK (Минималистичный защитный водяной знак)
-    const wmWidth = 300;
-    const wmHeight = 40;
+    // 5. MANDATORY WATERMARK ("KaraokeCraft")
+    const wmWidth = 260;
+    const wmHeight = 36;
     const wmX = (width - wmWidth) / 2;
-    const wmY = height - 70;
+    const wmY = height - 60;
 
-    ctx.fillStyle = '#18181b';
-    ctx.strokeStyle = '#27272a';
+    ctx.fillStyle = 'rgba(9, 9, 11, 0.7)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(wmX, wmY, wmWidth, wmHeight, 8);
+    ctx.roundRect(wmX, wmY, wmWidth, wmHeight, 999);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#22c55e';
-    ctx.font = '600 15px sans-serif';
+    ctx.fillStyle = '#ffb547';
+    ctx.font = '700 14px "Unbounded", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('✦ KaraokeCraft • Spotify Lyrics', width / 2, wmY + 25);
+    ctx.fillText('✦ KaraokeCraft', width / 2, wmY + 23);
   };
 
   const handleStartRecord = async () => {
@@ -209,7 +220,7 @@ export default function VideoDownloaderModal({
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
 
-    drawFrame(ctx, karaoke.lyrics[0]?.time || 5);
+    drawFrame(ctx, karaoke.lyrics[0]?.time || 4);
 
     const dataUrl = canvasRef.current.toDataURL('image/png');
     const a = document.createElement('a');
@@ -219,151 +230,205 @@ export default function VideoDownloaderModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75">
-      <div className="relative w-full max-w-xl rounded-2xl bg-zinc-900 border border-zinc-800 p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
-        
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(9, 9, 11, 0.78)',
+        backdropFilter: 'blur(8px)',
+        display: 'grid',
+        placeItems: 'center',
+        zIndex: 100,
+        padding: '16px',
+      }}
+      onClick={() => {
+        synthPlayer?.stop();
+        onClose();
+      }}
+    >
+      <div
+        style={{
+          background: 'var(--s1)',
+          border: '1px solid var(--ln)',
+          borderRadius: '24px',
+          padding: '28px',
+          maxWidth: '520px',
+          width: '100%',
+          boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
-          <div className="flex items-center gap-2">
-            <Video className="w-5 h-5 text-green-500" />
-            <div>
-              <h3 className="font-semibold text-base text-zinc-100">Скачать видео караоке</h3>
-              <p className="text-xs text-zinc-400">С водяным знаком KaraokeCraft</p>
-            </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+          <div>
+            <h3 style={{ margin: 0, font: '700 18px var(--fd)' }}>Скачать видео</h3>
+            <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--mu)' }}>
+              С защитным водяным знаком KaraokeCraft
+            </p>
           </div>
           <button
             onClick={() => {
               synthPlayer?.stop();
               onClose();
             }}
-            className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            style={{
+              background: 'none',
+              border: 0,
+              color: 'var(--mu)',
+              padding: '4px',
+              borderRadius: '50%',
+            }}
           >
-            <X className="w-5 h-5" />
+            <X style={{ width: '20px', height: '20px' }} />
           </button>
         </div>
 
         {/* Format Selector */}
-        <div className="mt-5 space-y-4">
-          <div>
-            <label className="text-xs font-medium text-zinc-400 block mb-2">
-              Формат видео
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setAspectRatio('reel')}
-                className={`p-3 rounded-lg border text-left transition-colors ${
-                  aspectRatio === 'reel'
-                    ? 'bg-green-500/5 border-green-500 text-zinc-100'
-                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <div className="font-medium text-sm text-zinc-200">Вертикальный (9:16)</div>
-                <div className="text-xs text-zinc-500">Reels, Shorts, TikTok</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAspectRatio('landscape')}
-                className={`p-3 rounded-lg border text-left transition-colors ${
-                  aspectRatio === 'landscape'
-                    ? 'bg-green-500/5 border-green-500 text-zinc-100'
-                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <div className="font-medium text-sm text-zinc-200">Горизонтальный (16:9)</div>
-                <div className="text-xs text-zinc-500">YouTube, мониторы</div>
-              </button>
-            </div>
-          </div>
-
-          {/* Watermark Notice */}
-          <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-start gap-2.5">
-            <ShieldCheck className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-            <div className="text-xs leading-relaxed text-zinc-400">
-              Видео сохраняются с водяным знаком <span className="text-zinc-200 font-medium">«✦ KaraokeCraft»</span> в нижней части экрана.
-            </div>
-          </div>
-
-          <canvas
-            ref={canvasRef}
-            width={width}
-            height={height}
-            className="hidden"
-          />
-
-          {/* Progress / Status */}
-          {isRecording && (
-            <div className="p-3.5 rounded-lg bg-zinc-950 border border-zinc-800 space-y-2">
-              <div className="flex items-center justify-between text-xs text-zinc-300">
-                <span className="flex items-center gap-2">
-                  <Loader2 className="w-3.5 h-3.5 text-green-500 animate-spin" />
-                  {recordingStatus}
-                </span>
-                <span className="font-mono text-zinc-400">{Math.round(progress)}%</span>
-              </div>
-              <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-green-500 transition-all duration-200"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Download Buttons */}
-          <div className="space-y-2.5 pt-1">
-            {!videoUrl ? (
-              <button
-                type="button"
-                onClick={handleStartRecord}
-                disabled={isRecording}
-                className="w-full py-2.5 px-4 rounded-lg bg-green-500 hover:bg-green-600 text-black font-medium text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {isRecording ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Запись видео...
-                  </>
-                ) : (
-                  <>
-                    <Video className="w-4 h-4" />
-                    Записать и скачать видео (.webm)
-                  </>
-                )}
-              </button>
-            ) : (
-              <div className="space-y-2">
-                <a
-                  href={videoUrl}
-                  download={`${karaoke.title.toLowerCase().replace(/\s+/g, '_')}_watermarked.webm`}
-                  className="w-full py-2.5 px-4 rounded-lg bg-green-500 hover:bg-green-600 text-black font-medium text-sm transition-colors flex items-center justify-center gap-2 text-center"
-                >
-                  <Download className="w-4 h-4" />
-                  Скачать видео на устройство
-                </a>
-                <button
-                  type="button"
-                  onClick={handleStartRecord}
-                  className="w-full py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium border border-zinc-700 transition-colors"
-                >
-                  Записать заново
-                </button>
-              </div>
-            )}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{ fontSize: '13px', color: 'var(--mu)', marginBottom: '8px' }}>Формат видео</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <button
+              type="button"
+              onClick={() => setAspectRatio('reel')}
+              className={`bt ${aspectRatio === 'reel' ? 'pr' : ''}`}
+              style={{
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                padding: '12px 14px',
+                borderRadius: '14px',
+                height: 'auto',
+              }}
+            >
+              <span style={{ fontWeight: 600, fontSize: '14px' }}>Вертикальный (9:16)</span>
+              <span style={{ fontSize: '12px', opacity: 0.8 }}>Reels, Shorts, TikTok</span>
+            </button>
 
             <button
               type="button"
-              onClick={handleDownloadSnapshot}
-              className="w-full py-2 px-4 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs font-medium transition-colors flex items-center justify-center gap-2"
+              onClick={() => setAspectRatio('landscape')}
+              className={`bt ${aspectRatio === 'landscape' ? 'pr' : ''}`}
+              style={{
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                padding: '12px 14px',
+                borderRadius: '14px',
+                height: 'auto',
+              }}
             >
-              <FileImage className="w-3.5 h-3.5 text-zinc-400" />
-              Скачать снимок кадра (.png)
+              <span style={{ fontWeight: 600, fontSize: '14px' }}>Горизонтальный (16:9)</span>
+              <span style={{ fontSize: '12px', opacity: 0.8 }}>YouTube, мониторы</span>
             </button>
           </div>
-
         </div>
 
+        {/* Watermark Notice */}
+        <div
+          style={{
+            padding: '12px 14px',
+            borderRadius: '12px',
+            background: 'var(--s2)',
+            border: '1px solid var(--ln)',
+            fontSize: '13px',
+            color: 'var(--mu)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginBottom: '20px',
+          }}
+        >
+          <ShieldCheck style={{ width: '18px', height: '18px', color: 'var(--ac)', flexShrink: 0 }} />
+          <span>
+            Видео сохраняются с водяным знаком <strong style={{ color: 'var(--tx)' }}>«✦ KaraokeCraft»</strong> внизу экрана.
+          </span>
+        </div>
+
+        <canvas ref={canvasRef} width={width} height={height} style={{ display: 'none' }} />
+
+        {/* Progress / Status */}
+        {isRecording && (
+          <div
+            style={{
+              padding: '14px',
+              borderRadius: '12px',
+              background: 'var(--s2)',
+              border: '1px solid var(--ln)',
+              marginBottom: '16px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Loader2 style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
+                {recordingStatus}
+              </span>
+              <span style={{ fontVariantNumeric: 'tabular-nums' }}>{Math.round(progress)}%</span>
+            </div>
+            <div style={{ width: '100%', height: '6px', background: 'var(--s1)', borderRadius: '999px', overflow: 'hidden' }}>
+              <div
+                style={{
+                  width: `${progress}%`,
+                  height: '100%',
+                  background: 'var(--ac)',
+                  transition: 'width 0.2s linear',
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {!videoUrl ? (
+            <button
+              type="button"
+              onClick={handleStartRecord}
+              disabled={isRecording}
+              className="bt pr"
+              style={{ width: '100%', padding: '12px' }}
+            >
+              {isRecording ? (
+                <>
+                  <Loader2 style={{ width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} />
+                  Запись видео...
+                </>
+              ) : (
+                <>
+                  <Video style={{ width: '16px', height: '16px' }} />
+                  Записать и скачать видео (.webm)
+                </>
+              )}
+            </button>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <a
+                href={videoUrl}
+                download={`${karaoke.title.toLowerCase().replace(/\s+/g, '_')}_watermarked.webm`}
+                className="bt pr"
+                style={{ width: '100%', padding: '12px', textAlign: 'center' }}
+              >
+                <Download style={{ width: '16px', height: '16px' }} />
+                Скачать видео на устройство
+              </a>
+              <button
+                type="button"
+                onClick={handleStartRecord}
+                className="bt"
+                style={{ width: '100%', padding: '10px' }}
+              >
+                Записать заново
+              </button>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleDownloadSnapshot}
+            className="bt"
+            style={{ width: '100%', padding: '10px' }}
+          >
+            <FileImage style={{ width: '16px', height: '16px' }} />
+            Скачать снимок кадра (.png)
+          </button>
+        </div>
       </div>
     </div>
   );

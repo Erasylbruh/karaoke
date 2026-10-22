@@ -6,8 +6,8 @@ import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 
 export const metadata: Metadata = {
-  title: 'KaraokeCraft — Генератор караоке-анимаций в стиле Spotify Lyrics',
-  description: 'Создавайте, настраивайте и скачивайте видео караоке в стиле Spotify Lyrics с водяным знаком. Синхронизация текста, темная тема, кастомизация и сообщество.',
+  title: 'KaraokeCraft — караоке-анимации',
+  description: 'Покажите песню так, как вы её слышите. Создавайте караоке-анимации в стиле Spotify Lyrics с динамической синхронизацией строк и экспортом видео с водяным знаком.',
 };
 
 export default function RootLayout({
@@ -16,14 +16,22 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="ru" className="dark h-full">
-      <body className="min-h-full flex flex-col bg-[#08080d] text-slate-100 antialiased selection:bg-[#1ed760] selection:text-black">
+    <html lang="ru" data-theme="dark">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;700&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body>
         <AuthProvider>
-          <Suspense fallback={<div className="h-16 border-b border-white/10 bg-[#08080d]" />}>
+          <Suspense fallback={<header className="hd"><div className="lg">KaraokeCraft</div></header>}>
             <Navbar />
           </Suspense>
-          <main className="flex-1 flex flex-col">
-            <Suspense fallback={<div className="min-h-[60vh] bg-[#08080d]" />}>
+          <main>
+            <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
               {children}
             </Suspense>
           </main>

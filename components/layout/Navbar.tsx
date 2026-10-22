@@ -2,304 +2,343 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { 
-  Mic2, 
-  Compass, 
-  PlusCircle, 
-  ShieldCheck, 
-  User, 
-  LogOut, 
-  Menu, 
-  X, 
-  Search
-} from 'lucide-react';
+import { ShieldCheck, LogOut, User as UserIcon } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
-  const router = useRouter();
-  const { user, isAdmin, logout, switchUser } = useAuth();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const { user, isAdmin, login, logout, switchUser } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authError, setAuthError] = useState('');
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (searchQuery.trim()) {
-      router.push(`/?search=${encodeURIComponent(searchQuery.trim())}`);
-      setMobileMenuOpen(false);
+    setAuthError('');
+    const success = await login(usernameInput, passwordInput);
+    if (success) {
+      setShowAuthModal(false);
+      setUsernameInput('');
+      setPasswordInput('');
+    } else {
+      setAuthError('Неверное имя пользователя или пароль');
     }
   };
 
-  const navLinks = [
-    { href: '/', label: 'Главная', icon: Compass },
-    { href: '/create', label: 'Создать караоке', icon: PlusCircle, highlight: true },
-  ];
-
-  if (isAdmin) {
-    navLinks.push({ href: '/admin', label: 'Админ-панель', icon: ShieldCheck });
-  }
+  const handleQuickLogin = async (username: string) => {
+    setAuthError('');
+    const success = await login(username, 'password123');
+    if (success) {
+      setShowAuthModal(false);
+    }
+  };
 
   return (
-    <header className="sticky top-0 z-50 w-full bg-zinc-950/95 backdrop-blur-sm border-b border-zinc-800">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 gap-4">
-          
-          {/* Minimalist Logo */}
-          <Link href="/" className="flex items-center gap-2">
-            <Mic2 className="w-5 h-5 text-green-500" />
-            <span className="font-semibold text-base text-zinc-100 tracking-tight">
-              KaraokeCraft
-            </span>
+    <>
+      <header className="hd">
+        <Link href="/" className="lg" aria-label="KaraokeCraft, на главную">
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="var(--ac)" aria-hidden="true">
+            <rect x="2" y="9" width="4" height="11" rx="2" />
+            <rect x="9" y="2" width="4" height="18" rx="2" />
+            <rect x="16" y="6" width="4" height="14" rx="2" />
+          </svg>
+          <span>KaraokeCraft</span>
+        </Link>
+
+        <nav style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <Link
+            href="/"
+            className={`nv ${pathname === '/' ? 'active' : ''}`}
+            aria-current={pathname === '/' ? 'page' : undefined}
+          >
+            Главная
           </Link>
+          <Link
+            href="/create"
+            className={`nv ${pathname === '/create' ? 'active' : ''}`}
+            aria-current={pathname === '/create' ? 'page' : undefined}
+          >
+            Создать
+          </Link>
+          {isAdmin && (
+            <Link
+              href="/admin"
+              className={`nv ${pathname === '/admin' ? 'active' : ''}`}
+              aria-current={pathname === '/admin' ? 'page' : undefined}
+            >
+              Админка
+            </Link>
+          )}
+        </nav>
 
-          {/* Search Input */}
-          <form onSubmit={handleSearchSubmit} className="hidden md:flex flex-1 max-w-md mx-4">
-            <div className="relative w-full">
-              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-              <input
-                type="text"
-                placeholder="Поиск по песням, артистам, тегам..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-green-500 transition-colors"
-              />
-            </div>
-          </form>
+        <span style={{ flex: 1 }} />
 
-          {/* Desktop Navigation Links */}
-          <nav className="hidden md:flex items-center gap-2">
-            {navLinks.map((link) => {
-              const Icon = link.icon;
-              const isActive = pathname === link.href;
-              return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    link.highlight
-                      ? 'bg-green-500 hover:bg-green-600 text-black font-medium'
-                      : isActive
-                      ? 'bg-zinc-800 text-zinc-100'
-                      : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {link.label}
-                </Link>
-              );
-            })}
-          </nav>
+        {user ? (
+          <div style={{ position: 'relative' }}>
+            <button
+              className="bt"
+              onClick={() => setShowDropdown(!showDropdown)}
+              style={{ padding: '6px 14px 6px 8px' }}
+            >
+              {user.avatar ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={user.avatar}
+                  alt={user.name}
+                  style={{ width: '24px', height: '24px', borderRadius: '50%', objectFit: 'cover' }}
+                />
+              ) : (
+                <UserIcon style={{ width: '16px', height: '16px' }} />
+              )}
+              <span style={{ fontSize: '13px' }}>{user.name}</span>
+            </button>
 
-          {/* User Auth Section */}
-          <div className="hidden md:flex items-center gap-3">
-            {user ? (
-              <div className="relative">
-                <button
-                  onClick={() => setUserDropdownOpen(!userDropdownOpen)}
-                  className="flex items-center gap-2.5 p-1.5 pl-2.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition-colors focus:outline-none"
-                >
-                  <span className="text-xs font-medium text-zinc-200">{user.name}</span>
-                  {user.role === 'admin' && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 font-medium uppercase">
-                      Admin
+            {showDropdown && (
+              <div
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: 'calc(100% + 8px)',
+                  background: 'var(--s1)',
+                  border: '1px solid var(--ln)',
+                  borderRadius: '16px',
+                  padding: '8px',
+                  minWidth: '200px',
+                  zIndex: 40,
+                  boxShadow: '0 12px 30px rgba(0,0,0,0.5)',
+                }}
+              >
+                <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--ln)', marginBottom: '6px' }}>
+                  <div style={{ fontWeight: 600, fontSize: '13px' }}>{user.name}</div>
+                  <div style={{ color: 'var(--mu)', fontSize: '12px' }}>@{user.username}</div>
+                  {isAdmin && (
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        marginTop: '4px',
+                        fontSize: '11px',
+                        background: 'rgba(255, 181, 71, 0.15)',
+                        color: 'var(--ac)',
+                        padding: '2px 8px',
+                        borderRadius: '999px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      Администратор
                     </span>
                   )}
-                  <img
-                    src={user.avatar}
-                    alt={user.name}
-                    className="w-7 h-7 rounded-full object-cover border border-zinc-700"
-                  />
+                </div>
+
+                {isAdmin && (
+                  <Link
+                    href="/admin"
+                    onClick={() => setShowDropdown(false)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 12px',
+                      fontSize: '13px',
+                      borderRadius: '8px',
+                      color: 'var(--tx)',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    <ShieldCheck style={{ width: '15px', height: '15px', color: 'var(--ac)' }} />
+                    Панель модерации
+                  </Link>
+                )}
+
+                <button
+                  onClick={() => {
+                    switchUser(isAdmin ? 'user-liza' : 'user-admin');
+                    setShowDropdown(false);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '13px',
+                    borderRadius: '8px',
+                    color: 'var(--mu)',
+                    background: 'none',
+                    border: 'none',
+                    textAlign: 'left',
+                  }}
+                >
+                  <UserIcon style={{ width: '15px', height: '15px' }} />
+                  Сменить роль ({isAdmin ? 'на Пользователя' : 'на Админа'})
                 </button>
 
-                {/* Dropdown Menu */}
-                {userDropdownOpen && (
-                  <div 
-                    className="absolute right-0 mt-2 w-56 rounded-xl bg-zinc-900 border border-zinc-800 shadow-xl py-1.5 z-50"
-                    onMouseLeave={() => setUserDropdownOpen(false)}
-                  >
-                    <div className="px-4 py-2 border-b border-zinc-800">
-                      <p className="text-xs text-zinc-500">Вы вошли как</p>
-                      <p className="text-sm font-medium text-zinc-100 truncate">{user.email}</p>
-                    </div>
-
-                    <Link
-                      href="/profile"
-                      onClick={() => setUserDropdownOpen(false)}
-                      className="flex items-center gap-2.5 px-4 py-2 text-sm text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
-                    >
-                      <User className="w-4 h-4 text-zinc-400" />
-                      Мой профиль
-                    </Link>
-
-                    <Link
-                      href="/create"
-                      onClick={() => setUserDropdownOpen(false)}
-                      className="flex items-center gap-2.5 px-4 py-2 text-sm text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
-                    >
-                      <PlusCircle className="w-4 h-4 text-green-500" />
-                      Создать анимацию
-                    </Link>
-
-                    {isAdmin && (
-                      <Link
-                        href="/admin"
-                        onClick={() => setUserDropdownOpen(false)}
-                        className="flex items-center gap-2.5 px-4 py-2 text-sm text-green-500 hover:bg-zinc-800 transition-colors"
-                      >
-                        <ShieldCheck className="w-4 h-4" />
-                        Панель администратора
-                      </Link>
-                    )}
-
-                    {/* Role quick switch for demonstration */}
-                    <div className="px-4 py-2 border-t border-b border-zinc-800 my-1">
-                      <p className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider mb-1.5">
-                        Быстрый переключатель
-                      </p>
-                      <div className="flex gap-1.5">
-                        <button
-                          onClick={() => { switchUser('user-admin'); setUserDropdownOpen(false); }}
-                          className={`text-xs px-2.5 py-1 rounded transition-colors ${user.role === 'admin' ? 'bg-zinc-800 text-green-400 font-medium' : 'text-zinc-400 hover:bg-zinc-800'}`}
-                        >
-                          Админ
-                        </button>
-                        <button
-                          onClick={() => { switchUser('user-aleksei'); setUserDropdownOpen(false); }}
-                          className={`text-xs px-2.5 py-1 rounded transition-colors ${user.role === 'user' ? 'bg-zinc-800 text-green-400 font-medium' : 'text-zinc-400 hover:bg-zinc-800'}`}
-                        >
-                          Пользователь
-                        </button>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => { logout(); setUserDropdownOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors text-left"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      Выйти
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Link
-                  href="/login"
-                  className="px-3.5 py-2 text-sm font-medium text-zinc-400 hover:text-zinc-100 transition-colors"
-                >
-                  Войти
-                </Link>
-                <Link
-                  href="/register"
-                  className="px-4 py-2 text-sm font-medium rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-100 transition-colors"
-                >
-                  Регистрация
-                </Link>
-              </div>
-            )}
-          </div>
-
-          {/* Mobile menu toggle */}
-          <div className="flex md:hidden items-center gap-2">
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100"
-            >
-              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
-          </div>
-
-        </div>
-      </div>
-
-      {/* Mobile Drawer */}
-      {mobileMenuOpen && (
-        <div className="md:hidden border-b border-zinc-800 bg-zinc-950 px-4 pt-3 pb-6 space-y-4">
-          <form onSubmit={handleSearchSubmit} className="relative w-full">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-            <input
-              type="text"
-              placeholder="Поиск по караоке..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-green-500"
-            />
-          </form>
-
-          <div className="flex flex-col space-y-1">
-            {navLinks.map((link) => {
-              const Icon = link.icon;
-              const isActive = pathname === link.href;
-              return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    link.highlight
-                      ? 'bg-green-500 text-black font-medium'
-                      : isActive
-                      ? 'bg-zinc-800 text-zinc-100'
-                      : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {link.label}
-                </Link>
-              );
-            })}
-          </div>
-
-          <div className="pt-3 border-t border-zinc-800">
-            {user ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-3 px-2 py-1">
-                  <img src={user.avatar} alt={user.name} className="w-8 h-8 rounded-full object-cover" />
-                  <div>
-                    <p className="text-sm font-medium text-zinc-100">{user.name}</p>
-                    <p className="text-xs text-zinc-500">{user.email}</p>
-                  </div>
-                </div>
-                <Link
-                  href="/profile"
-                  onClick={() => setMobileMenuOpen(false)}
-                  className="flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-900 rounded-lg"
-                >
-                  <User className="w-4 h-4 text-zinc-400" />
-                  Мой профиль
-                </Link>
                 <button
-                  onClick={() => { logout(); setMobileMenuOpen(false); }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded-lg text-left"
+                  onClick={() => {
+                    logout();
+                    setShowDropdown(false);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '13px',
+                    borderRadius: '8px',
+                    color: '#ef4444',
+                    background: 'none',
+                    border: 'none',
+                    textAlign: 'left',
+                  }}
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut style={{ width: '15px', height: '15px' }} />
                   Выйти
                 </button>
               </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <Link
-                  href="/login"
-                  onClick={() => setMobileMenuOpen(false)}
-                  className="text-center py-2 rounded-lg bg-zinc-800 text-zinc-200 font-medium text-sm"
-                >
-                  Войти
-                </Link>
-                <Link
-                  href="/register"
-                  onClick={() => setMobileMenuOpen(false)}
-                  className="text-center py-2 rounded-lg bg-green-500 text-black font-medium text-sm"
-                >
-                  Регистрация
-                </Link>
-              </div>
             )}
+          </div>
+        ) : (
+          <button className="bt" id="login" onClick={() => setShowAuthModal(true)}>
+            Войти
+          </button>
+        )}
+      </header>
+
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(9, 9, 11, 0.75)',
+            backdropFilter: 'blur(8px)',
+            display: 'grid',
+            placeItems: 'center',
+            zIndex: 100,
+            padding: '20px',
+          }}
+          onClick={() => setShowAuthModal(false)}
+        >
+          <div
+            style={{
+              background: 'var(--s1)',
+              border: '1px solid var(--ln)',
+              borderRadius: '24px',
+              padding: '32px',
+              maxWidth: '420px',
+              width: '100%',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+              <svg width="24" height="24" viewBox="0 0 22 22" fill="var(--ac)" aria-hidden="true">
+                <rect x="2" y="9" width="4" height="11" rx="2" />
+                <rect x="9" y="2" width="4" height="18" rx="2" />
+                <rect x="16" y="6" width="4" height="14" rx="2" />
+              </svg>
+              <h3 style={{ margin: 0, font: '700 20px var(--fd)' }}>Вход в KaraokeCraft</h3>
+            </div>
+
+            <p style={{ color: 'var(--mu)', fontSize: '14px', marginBottom: '24px' }}>
+              Войдите, чтобы создавать свои караоке-анимации, ставить лайки и экспортировать видео.
+            </p>
+
+            <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', color: 'var(--mu)', marginBottom: '6px' }}>
+                  Имя пользователя
+                </label>
+                <input
+                  type="text"
+                  placeholder="admin или liza_veter"
+                  value={usernameInput}
+                  onChange={(e) => setUsernameInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'var(--s2)',
+                    border: '1px solid var(--ln)',
+                    borderRadius: '12px',
+                    padding: '10px 14px',
+                    color: 'var(--tx)',
+                    outline: 'none',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', color: 'var(--mu)', marginBottom: '6px' }}>
+                  Пароль
+                </label>
+                <input
+                  type="password"
+                  placeholder="Любой пароль для демо"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'var(--s2)',
+                    border: '1px solid var(--ln)',
+                    borderRadius: '12px',
+                    padding: '10px 14px',
+                    color: 'var(--tx)',
+                    outline: 'none',
+                  }}
+                />
+              </div>
+
+              {authError && (
+                <div style={{ color: '#ef4444', fontSize: '13px' }}>{authError}</div>
+              )}
+
+              <button type="submit" className="bt pr" style={{ marginTop: '8px' }}>
+                Войти
+              </button>
+            </form>
+
+            <div style={{ margin: '20px 0 14px', textAlign: 'center', color: 'var(--mu)', fontSize: '13px' }}>
+              Быстрый вход для тестирования:
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <button
+                type="button"
+                className="bt"
+                onClick={() => handleQuickLogin('liza_veter')}
+                style={{ fontSize: '13px', padding: '8px' }}
+              >
+                Лиза Ветер (User)
+              </button>
+              <button
+                type="button"
+                className="bt"
+                onClick={() => handleQuickLogin('admin')}
+                style={{ fontSize: '13px', padding: '8px', color: 'var(--ac)' }}
+              >
+                Администратор
+              </button>
+            </div>
+
+            <button
+              onClick={() => setShowAuthModal(false)}
+              style={{
+                width: '100%',
+                background: 'none',
+                border: 'none',
+                color: 'var(--mu)',
+                fontSize: '13px',
+                marginTop: '16px',
+                padding: '6px',
+              }}
+            >
+              Отмена
+            </button>
           </div>
         </div>
       )}
-    </header>
+    </>
   );
 }

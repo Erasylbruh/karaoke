@@ -246,14 +246,14 @@ export default function SpotifyLyricsEngine({
     'Caveat': 'font-serif italic',
     'Playfair Display': 'font-serif',
     'JetBrains Mono': 'font-mono',
-  }[style.font] || 'font-sans';
+  }[style?.font as string] || 'font-sans';
 
-  const fontSizeClass = {
+  const fontSizeClass = (style?.fontSize && typeof style.fontSize === 'string' && {
     sm: 'text-lg sm:text-xl md:text-2xl',
     md: 'text-xl sm:text-2xl md:text-3xl',
     lg: 'text-2xl sm:text-3xl md:text-4xl',
     xl: 'text-3xl sm:text-4xl md:text-5xl',
-  }[style.fontSize] || 'text-2xl sm:text-3xl';
+  }[style.fontSize]) || 'text-2xl sm:text-3xl';
 
   const renderIcon = () => {
     switch (style.coverIcon) {

@@ -6,14 +6,15 @@ export interface LyricLine {
 }
 
 export type FontFamily = 
+  | 'Onest'
+  | 'Unbounded'
+  | 'Georgia'
+  | 'Mono'
   | 'Inter'
   | 'Poppins'
   | 'Montserrat'
   | 'Space Grotesk'
-  | 'Outfit'
-  | 'Caveat'
-  | 'Playfair Display'
-  | 'JetBrains Mono';
+  | 'Outfit';
 
 export type BackgroundType = 
   | 'mesh'
@@ -23,19 +24,21 @@ export type BackgroundType =
   | 'particles'
   | 'custom';
 
-export type FontSize = 'sm' | 'md' | 'lg' | 'xl';
+export type FontSize = 'sm' | 'md' | 'lg' | 'xl' | number;
 
 export interface KaraokeStyle {
-  font: FontFamily;
+  font: FontFamily | string;
   textColor: string;        // Inactive text color
   activeColor: string;      // Active highlighted text color
-  backgroundType: BackgroundType;
+  backgroundType?: BackgroundType;
   backgroundColor: string;  // Base background color
   backgroundGradient?: string; // Optional gradient / mesh colors
   backgroundImage?: string; // Custom uploaded image URL
-  fontSize: FontSize;
-  coverIcon: string;        // Emoji or icon name (e.g. 'mic', 'disc', 'flame', 'sparkles', 'headphones')
-  coverImage?: string;      // Custom cover image URL
+  fontSize?: FontSize;
+  fontSizePx?: number;
+  aspectRatio?: '9:16' | '16:9' | 'v' | 'h';
+  coverIcon?: string;
+  coverImage?: string;
 }
 
 export interface Karaoke {
@@ -45,16 +48,17 @@ export interface Karaoke {
   description: string;
   tags: string[];
   lyrics: LyricLine[];
-  audioUrl?: string;        // Audio file URL or synthesizer preset ID
+  audioUrl?: string;
   audioPreset?: 'synthwave' | 'lofi' | 'pop' | 'cyberpunk' | 'chill' | 'rock';
   duration: number;         // Total duration in seconds
   style: KaraokeStyle;
   authorId: string;
   authorName: string;
-  authorAvatar: string;
+  authorAvatar?: string;
   likesCount: number;
   viewsCount: number;
-  isFeatured: boolean;
+  recommendationScore?: number;
+  isFeatured?: boolean;
   createdAt: string;        // ISO date string
 }
 
@@ -81,4 +85,4 @@ export interface User {
   createdAt: string;
 }
 
-export type SortOption = 'newest' | 'oldest' | 'popular' | 'recommended';
+export type SortOption = 'recommended' | 'popular' | 'newest' | 'oldest';
