@@ -94,7 +94,7 @@ export default function LoginPage() {
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => handleQuickLogin('admin@karaoke.craft')}
+              onClick={() => handleQuickLogin('admin')}
               className="p-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-300 flex items-center justify-center gap-1.5 transition-colors"
             >
               <ShieldCheck className="w-3.5 h-3.5 text-green-500" />
@@ -103,7 +103,7 @@ export default function LoginPage() {
 
             <button
               type="button"
-              onClick={() => handleQuickLogin('demo@karaoke.craft')}
+              onClick={() => handleQuickLogin('liza_veter')}
               className="p-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-300 flex items-center justify-center gap-1.5 transition-colors"
             >
               <User className="w-3.5 h-3.5 text-zinc-400" />
