@@ -3,7 +3,7 @@ import { Metadata } from 'next';
 import KaraokeCreator from '@/components/karaoke/KaraokeCreator';
 
 export const metadata: Metadata = {
-  title: 'Создать караоке — KaraokeCraft',
+  title: 'Студия',
   description: 'Создайте свою караоке-анимацию в стиле Spotify Lyrics с настройкой цвета, шрифта, фона и таймингов.',
 };
 
