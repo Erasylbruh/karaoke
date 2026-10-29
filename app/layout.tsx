@@ -3,8 +3,9 @@ import { Suspense } from 'react';
 import './globals.css';
 import { fontVariables } from './fonts';
 import { AuthProvider } from '@/context/AuthContext';
-import Navbar from '@/components/layout/Navbar';
-import Footer from '@/components/layout/Footer';
+import { Logo } from '@/components/layout/Logo';
+import { SiteFooter } from '@/components/layout/SiteFooter';
+import { SiteHeader } from '@/components/layout/SiteHeader';
 
 export const metadata: Metadata = {
   title: {
@@ -27,15 +28,25 @@ export default function RootLayout({
     <html lang="ru" className={fontVariables}>
       <body className="flex min-h-dvh flex-col">
         <AuthProvider>
-          <Suspense fallback={<header className="hd"><div className="lg">KaraokeCraft</div></header>}>
-            <Navbar />
+          <Suspense
+            fallback={
+              <header className="sticky top-0 z-40 h-16 border-b border-line bg-ink/75 backdrop-blur-xl">
+                <div className="wrap flex h-full items-center">
+                  <Logo />
+                </div>
+              </header>
+            }
+          >
+            <SiteHeader />
           </Suspense>
           <main className="flex-1">
             <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
               {children}
             </Suspense>
           </main>
-          <Footer />
+          <Suspense fallback={null}>
+            <SiteFooter />
+          </Suspense>
         </AuthProvider>
       </body>
     </html>
