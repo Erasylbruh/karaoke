@@ -19,6 +19,9 @@ export interface Playback {
 }
 
 const INITIAL_VOLUME = 0.8;
+// The synth's own starting gain (see initContext in lib/audio-synthesizer.ts). The synth is shared
+// with the exporter and the studio, so the player hands it back at this level.
+export const SYNTH_DEFAULT_GAIN = 0.4;
 // The synth is loud at full gain; the slider's 1 maps to half of it.
 const GAIN_SCALE = 0.5;
 
@@ -143,8 +146,14 @@ export function usePlayback({ duration, preset }: { duration: number; preset?: K
     applyVolume();
   }, [applyVolume]);
 
-  // Leaving the page stops the clock and the sound.
-  useEffect(() => halt, [halt]);
+  // Leaving the page stops the clock and the sound and gives the synth back its default gain.
+  useEffect(
+    () => () => {
+      halt();
+      synthPlayer?.setVolume(SYNTH_DEFAULT_GAIN);
+    },
+    [halt],
+  );
 
   return { time, isPlaying, volume, muted, play, pause, toggle, seek, skip, setVolume, toggleMute };
 }

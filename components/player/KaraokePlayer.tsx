@@ -13,6 +13,7 @@ import { Menu, MenuItem } from '@/components/ui/menu';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/context/AuthContext';
+import { synthPlayer } from '@/lib/audio-synthesizer';
 import { fontFamilyFor } from '@/lib/fonts';
 import { formatCount } from '@/lib/format';
 import { trackDuration } from '@/lib/lyrics';
@@ -21,7 +22,7 @@ import { GUEST_USER_ID, useStoredKaraokes, useStoredLikedIds } from '@/lib/store
 import type { Karaoke, LyricLine } from '@/lib/types';
 import { LyricsView } from './LyricsView';
 import { PlayerControls } from './PlayerControls';
-import { usePlayback } from './usePlayback';
+import { SYNTH_DEFAULT_GAIN, usePlayback } from './usePlayback';
 
 const SKIP_SECONDS = 5;
 
@@ -238,9 +239,11 @@ function PlayerView({ track }: { track: Karaoke }) {
     }
   }, [show]);
 
-  // The exporter plays the backing track itself, so the player falls silent first.
+  // The exporter plays the backing track itself, so the player falls silent first. It never sets the
+  // volume, so the player's mute or slider level must not carry over into the recording.
   const openDownload = useCallback(() => {
     pause();
+    synthPlayer?.setVolume(SYNTH_DEFAULT_GAIN);
     setDownloadOpen(true);
   }, [pause]);
 
