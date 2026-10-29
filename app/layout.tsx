@@ -6,6 +6,7 @@ import { AuthProvider } from '@/context/AuthContext';
 import { Logo } from '@/components/layout/Logo';
 import { SiteFooter } from '@/components/layout/SiteFooter';
 import { SiteHeader } from '@/components/layout/SiteHeader';
+import { ToastProvider } from '@/components/ui/toast';
 
 export const metadata: Metadata = {
   title: {
@@ -28,25 +29,27 @@ export default function RootLayout({
     <html lang="ru" className={fontVariables}>
       <body className="flex min-h-dvh flex-col">
         <AuthProvider>
-          <Suspense
-            fallback={
-              <header className="sticky top-0 z-40 h-16 border-b border-line bg-ink/75 backdrop-blur-xl">
-                <div className="wrap flex h-full items-center">
-                  <Logo />
-                </div>
-              </header>
-            }
-          >
-            <SiteHeader />
-          </Suspense>
-          <main className="flex-1">
-            <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
-              {children}
+          <ToastProvider>
+            <Suspense
+              fallback={
+                <header className="sticky top-0 z-40 h-16 border-b border-line bg-ink/75 backdrop-blur-xl">
+                  <div className="wrap flex h-full items-center">
+                    <Logo />
+                  </div>
+                </header>
+              }
+            >
+              <SiteHeader />
             </Suspense>
-          </main>
-          <Suspense fallback={null}>
-            <SiteFooter />
-          </Suspense>
+            <main className="flex-1">
+              <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
+                {children}
+              </Suspense>
+            </main>
+            <Suspense fallback={null}>
+              <SiteFooter />
+            </Suspense>
+          </ToastProvider>
         </AuthProvider>
       </body>
     </html>
