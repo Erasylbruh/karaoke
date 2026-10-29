@@ -1,3 +1,7 @@
+/* Cascade layers, lowest first: the legacy block sits below Tailwind's components and
+   utilities, so utility classes win over its old element and class rules. */
+@layer theme, base, legacy, components, utilities;
+
 @import "tailwindcss";
 
 /* "Сцена" design tokens. Utilities: bg-ink, bg-surface-1..3, border-line,
@@ -181,6 +185,8 @@
   inherits: false;
   initial-value: 0%;
 }
+
+@layer legacy {
 
 :root {
   --bg: #09090b;
@@ -982,3 +988,4 @@ button {
     transition: none;
   }
 }
+} /* @layer legacy */
