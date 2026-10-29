@@ -96,7 +96,7 @@ export function LyricCover({ track, variant = 'card', animate = 'never', classNa
         className={cn(
           'absolute inset-0 flex flex-col justify-center font-semibold leading-[1.15] [overflow-wrap:anywhere]',
           // A card keeps its top fifth free for corner badges, so the lines sit a little below the middle.
-          isHero ? 'gap-[2.5cqw] p-[7cqw] text-[7cqw]' : 'gap-[3cqw] px-[8cqw] pt-[18cqw] pb-[8cqw] text-[8.5cqw]',
+          isHero ? 'gap-[2cqw] px-[7cqw] py-[5cqw] text-[7cqw]' : 'gap-[2.5cqw] px-[8cqw] pt-[18cqw] pb-[8cqw] text-[8.5cqw]',
         )}
       >
         {lines.map((line, index) =>
@@ -117,8 +117,9 @@ export function LyricCover({ track, variant = 'card', animate = 'never', classNa
               </span>
             </p>
           ) : (
-            // Neighbour lines stay on one row and fade out at the frame edge.
-            <p key={index} className="overflow-hidden whitespace-nowrap opacity-40 [mask-image:linear-gradient(90deg,black_80%,transparent)]">
+            // Neighbour lines wrap normally and show only their first row(s): the text ends at a word
+            // boundary, like a shorter lyric line, instead of being cut mid-word at the frame edge.
+            <p key={index} className={cn('overflow-hidden opacity-40', isHero ? 'max-h-[2lh]' : 'max-h-[1lh]')}>
               {line}
             </p>
           ),

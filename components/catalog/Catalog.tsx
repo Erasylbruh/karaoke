@@ -56,6 +56,8 @@ export function Catalog() {
   if (query.q !== seenQ) {
     setSeenQ(query.q);
     if (query.q !== writtenQ) setSearch(query.q);
+    // The marker covers only the immediate catch-up: a later return to the same ?q= (Back) is external.
+    if (writtenQ !== null) setWrittenQ(null);
   }
 
   const inputRef = useRef<HTMLInputElement>(null);
