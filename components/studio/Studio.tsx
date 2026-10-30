@@ -6,6 +6,7 @@ import { Download, Send } from 'lucide-react';
 import VideoDownloaderModal, { formatForAspect } from '@/components/karaoke/VideoDownloaderModal';
 import { Button } from '@/components/ui/button';
 import { Field, Input, Textarea } from '@/components/ui/field';
+import { Segmented, tabPanelProps } from '@/components/ui/segmented';
 import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/context/AuthContext';
 import type { StyleFontKey } from '@/lib/fonts';
@@ -22,6 +23,7 @@ import { StudioPreview, type StudioPreviewHandle } from './StudioPreview';
 import { StudioSection } from './StudioSection';
 import { StylePanel } from './StylePanel';
 import { MAX_TAGS, TagInput } from './TagInput';
+import { TapSyncRecorder } from './TapSyncRecorder';
 
 export type StudioDraft = {
   title: string;
@@ -54,6 +56,13 @@ const INITIAL_DRAFT: StudioDraft = {
   fontSize: 32,
   aspect: 'v',
 };
+
+type LyricsMode = 'lrc' | 'tap';
+
+const LYRICS_MODES = [
+  { value: 'lrc', label: 'LRC' },
+  { value: 'tap', label: 'На слух' },
+] as const;
 
 const DEFAULT_ARTIST = 'Неизвестный исполнитель';
 
@@ -113,6 +122,7 @@ export function Studio() {
   const [titleError, setTitleError] = useState<string | undefined>(undefined);
   const [exportOpen, setExportOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [lyricsMode, setLyricsMode] = useState<LyricsMode>('lrc');
   const titleRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<StudioPreviewHandle>(null);
 
@@ -138,6 +148,12 @@ export function Studio() {
     const track = saveKaraoke(draftToKaraoke(draft, slugId(draft.title), user));
     show('Трек опубликован', 'success');
     router.push('/karaoke/' + track.id);
+  }
+
+  function onTapComplete(lines: LyricLine[]) {
+    update({ lyrics: lines, lrcText: toLrc(lines) });
+    setLyricsMode('lrc');
+    show('Тайминги записаны', 'success');
   }
 
   function openExport() {
@@ -214,10 +230,31 @@ export function Studio() {
             title="Текст и тайминги"
             description="Каждой строке нужна метка времени, когда её начинают петь."
           >
-            <LrcEditor
-              text={draft.lrcText}
-              onChange={(lrcText, lines) => update(lines ? { lrcText, lyrics: lines } : { lrcText })}
-            />
+            <div className="flex flex-col gap-5">
+              <Segmented
+                label="Способ ввода"
+                mode="tabs"
+                idPrefix="lyrics"
+                size="sm"
+                options={LYRICS_MODES}
+                value={lyricsMode}
+                onChange={setLyricsMode}
+              />
+              <div {...tabPanelProps('lyrics', lyricsMode)}>
+                {lyricsMode === 'lrc' ? (
+                  <LrcEditor
+                    text={draft.lrcText}
+                    onChange={(lrcText, lines) => update(lines ? { lrcText, lyrics: lines } : { lrcText })}
+                  />
+                ) : (
+                  <TapSyncRecorder
+                    initialText={draft.lyrics.map((line) => line.text).join('\n')}
+                    onComplete={onTapComplete}
+                    onStart={() => previewRef.current?.pause()}
+                  />
+                )}
+              </div>
+            </div>
           </StudioSection>
 
           <StudioSection step={3} title="Стиль" description="Шрифт, цвета и формат кадра.">
