@@ -82,6 +82,12 @@
     background-color: var(--color-accent-soft);
   }
 
+  /* Tailwind v4 preflight leaves buttons on the default arrow cursor. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
   /* A modal <dialog> locks the page behind it from scrolling. */
   html:has(dialog[open]) {
     overflow: hidden;
