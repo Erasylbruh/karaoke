@@ -1,435 +1,517 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
-import { 
-  X, 
-  Download, 
-  Video, 
-  ShieldCheck, 
-  Loader2, 
-  FileImage 
-} from 'lucide-react';
-import { Karaoke } from '@/lib/types';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Download, FileImage, RotateCcw, Video } from 'lucide-react';
+import { Button, buttonStyles } from '@/components/ui/button';
+import { cn } from '@/components/ui/cn';
+import { Modal } from '@/components/ui/modal';
 import { synthPlayer } from '@/lib/audio-synthesizer';
+import { DISPLAY_FONT, fontFamilyFor } from '@/lib/fonts';
+import type { Karaoke, KaraokeStyle, LyricLine } from '@/lib/types';
 
-interface VideoDownloaderModalProps {
-  karaoke: Karaoke;
-  isOpen: boolean;
-  onClose: () => void;
-  initialFormat?: 'reel' | 'landscape';
+type ExportFormat = 'reel' | 'landscape';
+type Phase = 'idle' | 'recording' | 'done' | 'unsupported';
+
+/** In order of preference; Safari has only mp4. */
+const MIME_TYPES = ['video/webm;codecs=vp9', 'video/webm', 'video/mp4'];
+const MAX_RECORD_SECONDS = 40;
+/** The synth's own default level; the player's volume or mute must not carry over into the file. */
+const RECORD_GAIN = 0.4;
+
+const FRAME_SIZE: Record<ExportFormat, { width: number; height: number }> = {
+  reel: { width: 720, height: 1280 },
+  landscape: { width: 1280, height: 720 },
+};
+
+const FORMATS: ReadonlyArray<{ value: ExportFormat; label: string; hint: string }> = [
+  { value: 'reel', label: 'Вертикальное 9:16', hint: 'Reels, Shorts, TikTok' },
+  { value: 'landscape', label: 'Горизонтальное 16:9', hint: 'YouTube и экраны' },
+];
+
+// The canvas cannot use CSS variables; these match surface-1, fg and accent for tracks saved without colours.
+const CANVAS_FALLBACK = { background: '#14121B', text: '#F4F4F5', active: '#FFB547' };
+
+/** Export format matching a track's own frame. */
+export function formatForAspect(aspect: KaraokeStyle['aspectRatio'] | undefined): ExportFormat {
+  return aspect === '16:9' || aspect === 'h' ? 'landscape' : 'reel';
 }
 
-export default function VideoDownloaderModal({
-  karaoke,
-  isOpen,
-  onClose,
-  initialFormat = 'reel',
-}: VideoDownloaderModalProps) {
-  const [isRecording, setIsRecording] = useState(false);
+/** The first video type this browser can record, or null when it cannot record a canvas at all. */
+function pickMimeType(): string | null {
+  if (typeof window === 'undefined' || typeof window.MediaRecorder?.isTypeSupported !== 'function') return null;
+  if (typeof HTMLCanvasElement.prototype.captureStream !== 'function') return null;
+  return MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) ?? null;
+}
+
+function fileSlug(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .replace(/[^0-9a-zа-яё]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'karaoke'
+  );
+}
+
+/** Valid lines in time order: old or hand-edited saves may hold junk or unsorted lines. */
+function validLines(lyrics: unknown): LyricLine[] {
+  if (!Array.isArray(lyrics)) return [];
+  return lyrics
+    .filter(
+      (line): line is LyricLine =>
+        !!line && typeof line.text === 'string' && typeof line.time === 'number' && Number.isFinite(line.time),
+    )
+    .sort((a, b) => a.time - b.time);
+}
+
+/** Loads the faces the frame uses, for the scripts in `text` (Cyrillic lives in its own font file). */
+function loadFonts(family: string, text: string): Promise<unknown> {
+  if (typeof document === 'undefined' || !document.fonts) return Promise.resolve();
+  return Promise.all([
+    document.fonts.load(`700 36px ${DISPLAY_FONT}`, text),
+    document.fonts.load(`700 42px ${family}`, text),
+    document.fonts.load(`600 32px ${family}`, text),
+    document.fonts.load(`500 22px ${family}`, text),
+  ]).catch(() => undefined);
+}
+
+/**
+ * Sets `ctx.font` so `text` fits `maxWidth`: shrinks the size down to 70%, then cuts the text with «…».
+ * Returns the text to draw.
+ */
+function fitText(ctx: CanvasRenderingContext2D, text: string, weight: number, size: number, family: string, maxWidth: number): string {
+  ctx.font = `${weight} ${size}px ${family}`;
+  const width = ctx.measureText(text).width;
+  if (width <= maxWidth) return text;
+  ctx.font = `${weight} ${Math.max(Math.round(size * 0.7), Math.floor((size * maxWidth) / width))}px ${family}`;
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  const chars = Array.from(text);
+  while (chars.length > 1 && ctx.measureText(`${chars.join('')}…`).width > maxWidth) chars.pop();
+  return `${chars.join('').trimEnd()}…`;
+}
+
+interface FrameSource {
+  track: Karaoke;
+  lines: LyricLine[];
+  format: ExportFormat;
+  /** Seconds the progress bar spans. */
+  duration: number;
+}
+
+function drawFrame(ctx: CanvasRenderingContext2D, { track, lines, format, duration }: FrameSource, elapsed: number) {
+  const { width, height } = FRAME_SIZE[format];
+  const reel = format === 'reel';
+  const style: Partial<KaraokeStyle> = track.style ?? {};
+  const background = style.backgroundColor || CANVAS_FALLBACK.background;
+  const textColor = style.textColor || CANVAS_FALLBACK.text;
+  const activeColor = style.activeColor || CANVAS_FALLBACK.active;
+  const family = fontFamilyFor(style.font);
+  const maxWidth = width - (reel ? 96 : 160);
+
+  ctx.globalAlpha = 1;
+  ctx.clearRect(0, 0, width, height);
+
+  // 1. Background in the track's colour, darker towards the bottom.
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+  const shade = ctx.createLinearGradient(0, 0, 0, height);
+  shade.addColorStop(0, 'rgba(0,0,0,0.2)');
+  shade.addColorStop(1, 'rgba(0,0,0,0.6)');
+  ctx.fillStyle = shade;
+  ctx.fillRect(0, 0, width, height);
+
+  // 2. Title in the display font, artist in the lyric font.
+  ctx.textAlign = 'center';
+  ctx.fillStyle = textColor;
+  const title = fitText(ctx, track.title, 700, reel ? 36 : 28, DISPLAY_FONT, maxWidth);
+  ctx.fillText(title, width / 2, reel ? 120 : 70);
+  ctx.globalAlpha = 0.7;
+  const artist = fitText(ctx, track.artist, 500, reel ? 22 : 18, family, maxWidth);
+  ctx.fillText(artist, width / 2, reel ? 165 : 100);
+
+  // 3. Lyrics around the line being sung.
+  let activeIndex = -1;
+  lines.forEach((line, index) => {
+    if (elapsed >= line.time) activeIndex = index;
+  });
+  const centerY = reel ? height / 2 : height / 2 + 30;
+  const lineHeight = reel ? 76 : 60;
+  lines.forEach((line, index) => {
+    const y = centerY + (index - activeIndex) * lineHeight;
+    if (y <= 200 || y >= height - 180) return;
+    const active = index === activeIndex;
+    ctx.fillStyle = active ? activeColor : textColor;
+    ctx.globalAlpha = active ? 1 : 0.35;
+    const size = active ? (reel ? 42 : 34) : reel ? 32 : 26;
+    ctx.fillText(fitText(ctx, line.text, active ? 700 : 600, size, family, maxWidth), width / 2, y);
+  });
+  ctx.globalAlpha = 1;
+
+  // 4. Progress bar.
+  const progress = duration > 0 ? Math.min(1, elapsed / duration) : 0;
+  const barWidth = width * 0.7;
+  const barX = (width - barWidth) / 2;
+  const barY = height - 100;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, barWidth, 4, 2);
+  ctx.fill();
+  ctx.fillStyle = activeColor;
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, barWidth * progress, 4, 2);
+  ctx.fill();
+
+  // 5. Mandatory watermark.
+  const wmWidth = 260;
+  const wmHeight = 36;
+  const wmX = (width - wmWidth) / 2;
+  const wmY = height - 60;
+  ctx.fillStyle = 'rgba(9, 9, 11, 0.7)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(wmX, wmY, wmWidth, wmHeight, 999);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#ffb547';
+  ctx.font = `700 14px ${DISPLAY_FONT}`;
+  ctx.fillText('✦ KaraokeCraft', width / 2, wmY + 23);
+}
+
+/** One recording in progress. */
+interface Recording {
+  discarded: boolean;
+  frame: number;
+  recorder: MediaRecorder | null;
+  videoTracks: MediaStreamTrack[];
+}
+
+/** Stops a recording and its backing track; its result is thrown away. */
+function discardRecording(run: Recording) {
+  run.discarded = true;
+  cancelAnimationFrame(run.frame);
+  if (run.recorder && run.recorder.state !== 'inactive') run.recorder.stop();
+  run.videoTracks.forEach((track) => track.stop());
+  synthPlayer?.stop();
+}
+
+/** Small frame in the track's colours, in the shape of the format. */
+function FormatThumb({ format, style }: { format: ExportFormat; style: Partial<KaraokeStyle> }) {
+  const text = style.textColor || 'var(--color-fg)';
+  const rest = { backgroundColor: text, opacity: 0.35 };
+  return (
+    <span aria-hidden="true" className="flex h-10 w-12 shrink-0 items-center justify-center">
+      <span
+        className={cn(
+          'flex flex-col items-center justify-center gap-[3px] rounded-[5px] ring-1 ring-white/10',
+          format === 'reel' ? 'h-10 w-[23px]' : 'h-[27px] w-12',
+        )}
+        style={{ backgroundColor: style.backgroundColor || 'var(--color-surface-1)' }}
+      >
+        <span className="h-[2px] w-1/2 rounded-full" style={rest} />
+        <span className="h-[3px] w-2/3 rounded-full" style={{ backgroundColor: style.activeColor || 'var(--color-accent)' }} />
+        <span className="h-[2px] w-1/2 rounded-full" style={rest} />
+      </span>
+    </span>
+  );
+}
+
+/** The dialog's contents. Mounted only while the dialog is open, so each opening starts afresh. */
+function ExportBody({ track, initialFormat }: { track: Karaoke; initialFormat: ExportFormat }) {
+  const [format, setFormat] = useState(initialFormat);
+  const [mimeType] = useState(pickMimeType);
+  const [phase, setPhase] = useState<Phase>(mimeType ? 'idle' : 'unsupported');
   const [progress, setProgress] = useState(0);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [recordingStatus, setRecordingStatus] = useState<string>('Готов к записи');
-  const [aspectRatio, setAspectRatio] = useState<'reel' | 'landscape'>(initialFormat);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const recordingRef = useRef<Recording | null>(null);
+  // After a phase change the old buttons disappear; focus moves to the first action of the new phase.
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const moveFocusRef = useRef(false);
+  const radioName = useId();
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
-  const animationFrameRef = useRef<number | null>(null);
+  const lines = useMemo(() => validLines(track.lyrics), [track.lyrics]);
+  const lastLine = lines.at(-1);
+  const trackSeconds = Number.isFinite(track.duration) && track.duration > 0 ? track.duration : (lastLine?.time ?? 0) + 4;
+  const recordSeconds = Math.min(trackSeconds, MAX_RECORD_SECONDS);
+  const style: Partial<KaraokeStyle> = track.style ?? {};
+  const family = fontFamilyFor(style.font);
+  const sampleText = useMemo(() => [track.title, track.artist, ...lines.map((line) => line.text)].join(' '), [track.title, track.artist, lines]);
+  // The still frame shows the second line being sung, with one line above it.
+  const stillTime = lines[1]?.time ?? lines[0]?.time ?? 0;
+  const { width, height } = FRAME_SIZE[format];
+  const ext = mimeType?.startsWith('video/mp4') ? 'mp4' : 'webm';
+  const fileBase = `${fileSlug(track.title)}_karaokecraft`;
 
+  // The still preview, redrawn when the format or the track changes (resizing the canvas clears it).
   useEffect(() => {
-    setAspectRatio(initialFormat);
-  }, [initialFormat]);
-
-  useEffect(() => {
+    if (phase === 'recording') return;
+    const ctx = canvasRef.current?.getContext('2d');
+    if (!ctx) return;
+    let stale = false;
+    loadFonts(family, sampleText).then(() => {
+      if (!stale) drawFrame(ctx, { track, lines, format, duration: recordSeconds }, stillTime);
+    });
     return () => {
-      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-      if (videoUrl) URL.revokeObjectURL(videoUrl);
+      stale = true;
     };
+  }, [phase, format, track, lines, family, sampleText, recordSeconds, stillTime]);
+
+  useEffect(() => {
+    if (!moveFocusRef.current) return;
+    moveFocusRef.current = false;
+    actionsRef.current?.querySelector<HTMLElement>('button, a')?.focus();
+  }, [phase]);
+
+  // A replaced or abandoned video frees its memory.
+  useEffect(() => {
+    if (!videoUrl) return;
+    return () => URL.revokeObjectURL(videoUrl);
   }, [videoUrl]);
 
-  if (!isOpen) return null;
+  // Closing the dialog mid-recording stops the recorder, the frame loop and the sound.
+  useEffect(
+    () => () => {
+      const run = recordingRef.current;
+      if (run) discardRecording(run);
+    },
+    [],
+  );
 
-  const width = aspectRatio === 'reel' ? 720 : 1280;
-  const height = aspectRatio === 'reel' ? 1280 : 720;
+  function changePhase(next: Phase) {
+    moveFocusRef.current = true;
+    setPhase(next);
+  }
 
-  const drawFrame = (ctx: CanvasRenderingContext2D, elapsedSec: number) => {
-    ctx.clearRect(0, 0, width, height);
-
-    // 1. Background color from track
-    const bgColor = karaoke.style?.backgroundColor || '#1d1b3a';
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, width, height);
-
-    // Subtle dark gradient overlay
-    const grad = ctx.createLinearGradient(0, 0, 0, height);
-    grad.addColorStop(0, 'rgba(0,0,0,0.2)');
-    grad.addColorStop(1, 'rgba(0,0,0,0.6)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, width, height);
-
-    // 2. Song Header
-    ctx.fillStyle = '#f4f4f5';
-    ctx.font = `700 ${aspectRatio === 'reel' ? 36 : 28}px "Unbounded", "Onest", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.fillText(karaoke.title, width / 2, aspectRatio === 'reel' ? 120 : 70);
-
-    ctx.fillStyle = '#a1a1aa';
-    ctx.font = `500 ${aspectRatio === 'reel' ? 22 : 18}px "Onest", sans-serif`;
-    ctx.fillText(karaoke.artist, width / 2, aspectRatio === 'reel' ? 165 : 100);
-
-    // 3. Synced Lyrics
-    const activeIdx = karaoke.lyrics.reduce((acc, line, idx) => {
-      return elapsedSec >= line.time ? idx : acc;
-    }, -1);
-
-    const centerY = aspectRatio === 'reel' ? height / 2 : height / 2 + 30;
-    const lineHeight = aspectRatio === 'reel' ? 76 : 60;
-
-    karaoke.lyrics.forEach((line, idx) => {
-      const distance = idx - activeIdx;
-      const y = centerY + distance * lineHeight;
-
-      if (y > 200 && y < height - 180) {
-        const isActive = idx === activeIdx;
-
-        if (isActive) {
-          ctx.fillStyle = karaoke.style?.activeColor || '#ffb547';
-          ctx.font = `700 ${aspectRatio === 'reel' ? 42 : 34}px "Onest", sans-serif`;
-        } else {
-          ctx.fillStyle = 'rgba(244, 244, 245, 0.35)';
-          ctx.font = `600 ${aspectRatio === 'reel' ? 32 : 26}px "Onest", sans-serif`;
-        }
-
-        ctx.textAlign = 'center';
-        ctx.fillText(line.text, width / 2, y);
-      }
-    });
-
-    // 4. Progress bar line at bottom
-    const progressPercent = Math.min(1, elapsedSec / (karaoke.duration || 40));
-    const barWidth = width * 0.7;
-    const barX = (width - barWidth) / 2;
-    const barY = height - 100;
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-    ctx.beginPath();
-    ctx.roundRect(barX, barY, barWidth, 4, 2);
-    ctx.fill();
-
-    ctx.fillStyle = karaoke.style?.activeColor || '#ffb547';
-    ctx.beginPath();
-    ctx.roundRect(barX, barY, barWidth * progressPercent, 4, 2);
-    ctx.fill();
-
-    // 5. MANDATORY WATERMARK ("KaraokeCraft")
-    const wmWidth = 260;
-    const wmHeight = 36;
-    const wmX = (width - wmWidth) / 2;
-    const wmY = height - 60;
-
-    ctx.fillStyle = 'rgba(9, 9, 11, 0.7)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect(wmX, wmY, wmWidth, wmHeight, 999);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#ffb547';
-    ctx.font = '700 14px "Unbounded", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('✦ KaraokeCraft', width / 2, wmY + 23);
-  };
-
-  const handleStartRecord = async () => {
-    if (!canvasRef.current) return;
-    setIsRecording(true);
-    setProgress(0);
-    setVideoUrl(null);
-    setRecordingStatus('Генерация видео...');
-    recordedChunksRef.current = [];
-
+  async function record() {
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const ctx = canvas?.getContext('2d');
+    if (!mimeType || !canvas || !ctx || recordingRef.current) return;
 
+    const run: Recording = { discarded: false, frame: 0, recorder: null, videoTracks: [] };
+    recordingRef.current = run;
+    setVideoUrl(null);
+    setProgress(0);
+    changePhase('recording');
+
+    await loadFonts(family, sampleText);
+    if (run.discarded) return;
+
+    const source: FrameSource = { track, lines, format, duration: recordSeconds };
+    drawFrame(ctx, source, 0);
     const canvasStream = canvas.captureStream(30);
+    run.videoTracks = canvasStream.getVideoTracks();
+    // The tap on the synth's output is shared by every recording, so its audio track is never stopped.
+    const audio = synthPlayer?.getMediaStreamDestination();
+    const stream = new MediaStream([...run.videoTracks, ...(audio?.stream.getAudioTracks() ?? [])]);
 
-    let combinedStream: MediaStream = canvasStream;
-    const audioDest = synthPlayer?.getMediaStreamDestination();
-    if (audioDest && audioDest.stream.getAudioTracks().length > 0) {
-      combinedStream = new MediaStream([
-        ...canvasStream.getVideoTracks(),
-        ...audioDest.stream.getAudioTracks(),
-      ]);
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3_000_000 });
+    } catch {
+      discardRecording(run);
+      recordingRef.current = null;
+      changePhase('unsupported');
+      return;
     }
+    run.recorder = recorder;
 
-    let mimeType = 'video/webm;codecs=vp9';
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = 'video/webm';
-    }
-
-    const recorder = new MediaRecorder(combinedStream, {
-      mimeType,
-      videoBitsPerSecond: 3000000,
-    });
-
-    mediaRecorderRef.current = recorder;
-
+    const chunks: Blob[] = [];
     recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) {
-        recordedChunksRef.current.push(event.data);
-      }
+      if (event.data.size > 0) chunks.push(event.data);
     };
-
     recorder.onstop = () => {
-      const blob = new Blob(recordedChunksRef.current, { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      setVideoUrl(url);
-      setIsRecording(false);
-      setRecordingStatus('Готово к скачиванию!');
+      run.videoTracks.forEach((videoTrack) => videoTrack.stop());
+      if (run.discarded) return;
+      recordingRef.current = null;
       synthPlayer?.stop();
+      setVideoUrl(URL.createObjectURL(new Blob(chunks, { type: recorder.mimeType || mimeType })));
+      changePhase('done');
     };
 
     recorder.start(100);
-    synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', 0);
+    synthPlayer?.setVolume(RECORD_GAIN);
+    synthPlayer?.playPreset(track.audioPreset ?? 'synthwave', 0);
 
-    const recordDuration = Math.min(karaoke.duration, 40);
-    const startTime = performance.now();
-
-    const recordLoop = (currentTime: number) => {
-      const elapsed = (currentTime - startTime) / 1000;
-      setProgress(Math.min(100, (elapsed / recordDuration) * 100));
-
-      drawFrame(ctx, elapsed);
-
-      if (elapsed < recordDuration && mediaRecorderRef.current?.state === 'recording') {
-        animationFrameRef.current = requestAnimationFrame(recordLoop);
-      } else {
-        if (mediaRecorderRef.current?.state === 'recording') {
-          mediaRecorderRef.current.stop();
-        }
-      }
+    const start = performance.now();
+    const tick = (now: number) => {
+      if (run.discarded) return;
+      const elapsed = Math.max(0, (now - start) / 1000);
+      drawFrame(ctx, source, Math.min(elapsed, recordSeconds));
+      setProgress(Math.min(100, Math.floor((elapsed / recordSeconds) * 100)));
+      if (elapsed < recordSeconds) run.frame = requestAnimationFrame(tick);
+      else if (recorder.state !== 'inactive') recorder.stop();
     };
+    run.frame = requestAnimationFrame(tick);
+  }
 
-    animationFrameRef.current = requestAnimationFrame(recordLoop);
-  };
+  function cancel() {
+    const run = recordingRef.current;
+    if (run) discardRecording(run);
+    recordingRef.current = null;
+    setProgress(0);
+    changePhase('idle');
+  }
 
-  const handleDownloadSnapshot = () => {
-    if (!canvasRef.current) return;
-    const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return;
+  function chooseFormat(next: ExportFormat) {
+    setFormat(next);
+    // A finished video no longer matches the chosen format.
+    if (phase === 'done') {
+      setVideoUrl(null);
+      setPhase('idle');
+    }
+  }
 
-    drawFrame(ctx, karaoke.lyrics[0]?.time || 4);
+  async function downloadFrame() {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    await loadFonts(family, sampleText);
+    drawFrame(ctx, { track, lines, format, duration: recordSeconds }, stillTime);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${fileBase}.png`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, 'image/png');
+  }
 
-    const dataUrl = canvasRef.current.toDataURL('image/png');
-    const a = document.createElement('a');
-    a.href = dataUrl;
-    a.download = `${karaoke.title.toLowerCase().replace(/\s+/g, '_')}_watermarked.png`;
-    a.click();
-  };
+  const recording = phase === 'recording';
+  const media = format === 'reel' ? 'aspect-[9/16] h-[min(300px,38dvh)] w-auto' : 'aspect-video h-auto w-full';
+  const frameButton = (
+    <Button
+      variant={phase === 'unsupported' ? 'primary' : 'secondary'}
+      block
+      icon={<FileImage aria-hidden="true" />}
+      onClick={downloadFrame}
+    >
+      Скачать кадр .png
+    </Button>
+  );
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(9, 9, 11, 0.78)',
-        backdropFilter: 'blur(8px)',
-        display: 'grid',
-        placeItems: 'center',
-        zIndex: 100,
-        padding: '16px',
-      }}
-      onClick={() => {
-        synthPlayer?.stop();
-        onClose();
-      }}
-    >
-      <div
-        style={{
-          background: 'var(--s1)',
-          border: '1px solid var(--ln)',
-          borderRadius: '24px',
-          padding: '28px',
-          maxWidth: '520px',
-          width: '100%',
-          boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <div>
-            <h3 style={{ margin: 0, font: '700 18px var(--fd)' }}>Скачать видео</h3>
-            <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--mu)' }}>
-              С защитным водяным знаком KaraokeCraft
+    <div className="space-y-5">
+      <div role="radiogroup" aria-label="Формат видео" className="grid gap-2 sm:grid-cols-2">
+        {FORMATS.map((option) => (
+          <label
+            key={option.value}
+            className={cn(
+              'flex cursor-pointer items-center gap-3 rounded-2xl border bg-surface-2 p-3 transition-colors',
+              'has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent',
+              'has-disabled:cursor-not-allowed has-disabled:opacity-60',
+              format === option.value ? 'border-accent bg-accent-soft' : 'border-line hover:border-line-strong',
+            )}
+          >
+            <input
+              type="radio"
+              name={radioName}
+              value={option.value}
+              checked={format === option.value}
+              onChange={() => chooseFormat(option.value)}
+              disabled={recording}
+              className="sr-only"
+            />
+            <FormatThumb format={option.value} style={style} />
+            <span className="min-w-0">
+              <span className="block text-[14px] font-semibold text-fg">{option.label}</span>
+              <span className="block text-[13px] text-fg-muted">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <div className="flex justify-center rounded-2xl border border-line bg-ink p-3">
+        <canvas
+          ref={canvasRef}
+          width={width}
+          height={height}
+          role="img"
+          aria-label="Кадр видео"
+          className={cn(media, 'rounded-lg', phase === 'done' && 'hidden')}
+        />
+        {phase === 'done' && videoUrl && (
+          <video src={videoUrl} controls playsInline muted aria-label="Записанное видео" className={cn(media, 'rounded-lg bg-ink')} />
+        )}
+      </div>
+
+      <p role="status" className="sr-only">
+        {recording ? 'Идёт запись видео' : phase === 'done' ? 'Видео готово' : ''}
+      </p>
+
+      <div ref={actionsRef} className="space-y-3">
+        {phase === 'unsupported' && (
+          <div className="space-y-3">
+            <p className="flex gap-3 rounded-2xl border border-line bg-surface-2 p-4 text-[14px] text-fg-muted">
+              <AlertTriangle aria-hidden="true" className="size-5 shrink-0 text-accent" />
+              Ваш браузер не умеет записывать видео. Скачайте кадр .png или откройте сайт в Chrome.
             </p>
-          </div>
-          <button
-            onClick={() => {
-              synthPlayer?.stop();
-              onClose();
-            }}
-            style={{
-              background: 'none',
-              border: 0,
-              color: 'var(--mu)',
-              padding: '4px',
-              borderRadius: '50%',
-            }}
-          >
-            <X style={{ width: '20px', height: '20px' }} />
-          </button>
-        </div>
-
-        {/* Format Selector */}
-        <div style={{ marginBottom: '20px' }}>
-          <div style={{ fontSize: '13px', color: 'var(--mu)', marginBottom: '8px' }}>Формат видео</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <button
-              type="button"
-              onClick={() => setAspectRatio('reel')}
-              className={`bt ${aspectRatio === 'reel' ? 'pr' : ''}`}
-              style={{
-                flexDirection: 'column',
-                alignItems: 'flex-start',
-                padding: '12px 14px',
-                borderRadius: '14px',
-                height: 'auto',
-              }}
-            >
-              <span style={{ fontWeight: 600, fontSize: '14px' }}>Вертикальный (9:16)</span>
-              <span style={{ fontSize: '12px', opacity: 0.8 }}>Reels, Shorts, TikTok</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setAspectRatio('landscape')}
-              className={`bt ${aspectRatio === 'landscape' ? 'pr' : ''}`}
-              style={{
-                flexDirection: 'column',
-                alignItems: 'flex-start',
-                padding: '12px 14px',
-                borderRadius: '14px',
-                height: 'auto',
-              }}
-            >
-              <span style={{ fontWeight: 600, fontSize: '14px' }}>Горизонтальный (16:9)</span>
-              <span style={{ fontSize: '12px', opacity: 0.8 }}>YouTube, мониторы</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Watermark Notice */}
-        <div
-          style={{
-            padding: '12px 14px',
-            borderRadius: '12px',
-            background: 'var(--s2)',
-            border: '1px solid var(--ln)',
-            fontSize: '13px',
-            color: 'var(--mu)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            marginBottom: '20px',
-          }}
-        >
-          <ShieldCheck style={{ width: '18px', height: '18px', color: 'var(--ac)', flexShrink: 0 }} />
-          <span>
-            Видео сохраняются с водяным знаком <strong style={{ color: 'var(--tx)' }}>«✦ KaraokeCraft»</strong> внизу экрана.
-          </span>
-        </div>
-
-        <canvas ref={canvasRef} width={width} height={height} style={{ display: 'none' }} />
-
-        {/* Progress / Status */}
-        {isRecording && (
-          <div
-            style={{
-              padding: '14px',
-              borderRadius: '12px',
-              background: 'var(--s2)',
-              border: '1px solid var(--ln)',
-              marginBottom: '16px',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Loader2 style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
-                {recordingStatus}
-              </span>
-              <span style={{ fontVariantNumeric: 'tabular-nums' }}>{Math.round(progress)}%</span>
-            </div>
-            <div style={{ width: '100%', height: '6px', background: 'var(--s1)', borderRadius: '999px', overflow: 'hidden' }}>
-              <div
-                style={{
-                  width: `${progress}%`,
-                  height: '100%',
-                  background: 'var(--ac)',
-                  transition: 'width 0.2s linear',
-                }}
-              />
-            </div>
+            {frameButton}
           </div>
         )}
 
-        {/* Action Buttons */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {!videoUrl ? (
-            <button
-              type="button"
-              onClick={handleStartRecord}
-              disabled={isRecording}
-              className="bt pr"
-              style={{ width: '100%', padding: '12px' }}
-            >
-              {isRecording ? (
-                <>
-                  <Loader2 style={{ width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} />
-                  Запись видео...
-                </>
-              ) : (
-                <>
-                  <Video style={{ width: '16px', height: '16px' }} />
-                  Записать и скачать видео (.webm)
-                </>
-              )}
-            </button>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <a
-                href={videoUrl}
-                download={`${karaoke.title.toLowerCase().replace(/\s+/g, '_')}_watermarked.webm`}
-                className="bt pr"
-                style={{ width: '100%', padding: '12px', textAlign: 'center' }}
-              >
-                <Download style={{ width: '16px', height: '16px' }} />
-                Скачать видео на устройство
-              </a>
-              <button
-                type="button"
-                onClick={handleStartRecord}
-                className="bt"
-                style={{ width: '100%', padding: '10px' }}
-              >
-                Записать заново
-              </button>
-            </div>
-          )}
+        {phase === 'idle' && (
+          <div className="space-y-2">
+            <Button variant="primary" block icon={<Video aria-hidden="true" />} onClick={record}>
+              Записать видео
+            </Button>
+            {frameButton}
+            <p className="pt-1 text-center text-[13px] text-fg-subtle">Запись идёт в реальном времени, около {Math.ceil(recordSeconds)} с.</p>
+          </div>
+        )}
 
-          <button
-            type="button"
-            onClick={handleDownloadSnapshot}
-            className="bt"
-            style={{ width: '100%', padding: '10px' }}
-          >
-            <FileImage style={{ width: '16px', height: '16px' }} />
-            Скачать снимок кадра (.png)
-          </button>
-        </div>
+        {recording && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-[14px]">
+              <span className="text-fg-muted">Запись видео…</span>
+              <span className="font-semibold tabular-nums">{progress}%</span>
+            </div>
+            <div
+              role="progressbar"
+              aria-label="Запись видео"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress}
+              className="h-1.5 overflow-hidden rounded-full bg-surface-3"
+            >
+              <div className="h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
+            </div>
+            <Button block onClick={cancel}>
+              Отмена
+            </Button>
+          </div>
+        )}
+
+        {phase === 'done' && videoUrl && (
+          <div className="space-y-2">
+            <a href={videoUrl} download={`${fileBase}.${ext}`} className={buttonStyles({ variant: 'primary', block: true })}>
+              <Download aria-hidden="true" />
+              Скачать видео
+            </a>
+            <Button block icon={<RotateCcw aria-hidden="true" />} onClick={record}>
+              Записать заново
+            </Button>
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+interface VideoDownloaderModalProps {
+  karaoke: Karaoke;
+  open: boolean;
+  onClose: () => void;
+  /** Defaults to the track's own frame (`style.aspectRatio`); applied on every opening. */
+  initialFormat?: ExportFormat;
+}
+
+/** Export of a track as a watermarked video (canvas + MediaRecorder) or a still .png frame. */
+export default function VideoDownloaderModal({ karaoke, open, onClose, initialFormat }: VideoDownloaderModalProps) {
+  return (
+    <Modal open={open} onClose={onClose} title="Скачать видео" description="С водяным знаком «✦ KaraokeCraft» внизу кадра">
+      {open && <ExportBody track={karaoke} initialFormat={initialFormat ?? formatForAspect(karaoke.style?.aspectRatio)} />}
+    </Modal>
   );
 }

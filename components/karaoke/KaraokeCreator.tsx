@@ -422,7 +422,7 @@ export default function KaraokeCreator() {
       {/* Video Downloader Modal */}
       <VideoDownloaderModal
         karaoke={currentPreviewKaraoke}
-        isOpen={isDownloadOpen}
+        open={isDownloadOpen}
         onClose={() => setIsDownloadOpen(false)}
       />
     </>

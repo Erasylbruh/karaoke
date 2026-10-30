@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Download, Heart, MoreHorizontal, Music2, Share2 } from 'lucide-react';
+import { ChevronLeft, Download, Heart, MessageCircle, MoreHorizontal, Music2, Share2 } from 'lucide-react';
+import CommentsSection from '@/components/karaoke/CommentsSection';
 import { LyricCover } from '@/components/karaoke/LyricCover';
 import VideoDownloaderModal from '@/components/karaoke/VideoDownloaderModal';
 import { Avatar } from '@/components/ui/avatar';
@@ -10,19 +11,19 @@ import { Button, buttonStyles } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { IconButton, iconButtonStyles } from '@/components/ui/icon-button';
 import { Menu, MenuItem } from '@/components/ui/menu';
+import { Modal } from '@/components/ui/modal';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/context/AuthContext';
-import { synthPlayer } from '@/lib/audio-synthesizer';
 import { fontFamilyFor } from '@/lib/fonts';
 import { formatCount } from '@/lib/format';
 import { trackDuration } from '@/lib/lyrics';
 import { incrementViewCount, toggleKaraokeLike } from '@/lib/storage';
-import { GUEST_USER_ID, useStoredKaraokes, useStoredLikedIds } from '@/lib/store';
+import { GUEST_USER_ID, useStoredComments, useStoredKaraokes, useStoredLikedIds } from '@/lib/store';
 import type { Karaoke, LyricLine } from '@/lib/types';
 import { LyricsView } from './LyricsView';
 import { PlayerControls } from './PlayerControls';
-import { SYNTH_DEFAULT_GAIN, usePlayback } from './usePlayback';
+import { usePlayback } from './usePlayback';
 
 const SKIP_SECONDS = 5;
 
@@ -79,6 +80,7 @@ export function PlayerSkeleton() {
             <Skeleton className="h-10 rounded-full" />
             <Skeleton className="h-10 rounded-full" />
             <Skeleton className="col-span-2 h-10 rounded-full" />
+            <Skeleton className="col-span-2 h-10 rounded-full" />
           </div>
         </div>
         <div className={cn(LYRICS_HEIGHT, 'flex flex-col justify-center gap-5')}>
@@ -120,13 +122,15 @@ function PlayerNotFound() {
 interface TrackActionsProps {
   track: Karaoke;
   liked: boolean;
+  commentsCount: number;
   onLike: () => void;
   onShare: () => void;
+  onComments: () => void;
   onDownload: () => void;
 }
 
 // The info panels do not depend on the clock, so they skip the 60 fps re-renders.
-const TrackAside = memo(function TrackAside({ track, liked, onLike, onShare, onDownload }: TrackActionsProps) {
+const TrackAside = memo(function TrackAside({ track, liked, commentsCount, onLike, onShare, onComments, onDownload }: TrackActionsProps) {
   const { active } = trackColors(track);
   const tags = Array.isArray(track.tags) ? track.tags : [];
 
@@ -167,6 +171,9 @@ const TrackAside = memo(function TrackAside({ track, liked, onLike, onShare, onD
         <Button variant="glass" onClick={onShare} icon={<Share2 aria-hidden="true" />}>
           Поделиться
         </Button>
+        <Button variant="glass" onClick={onComments} icon={<MessageCircle aria-hidden="true" />} className="col-span-2">
+          Отзывы ({commentsCount})
+        </Button>
         <Button variant="glass" onClick={onDownload} icon={<Download aria-hidden="true" />} className="col-span-2">
           Скачать видео
         </Button>
@@ -175,7 +182,7 @@ const TrackAside = memo(function TrackAside({ track, liked, onLike, onShare, onD
   );
 });
 
-const MobileTopBar = memo(function MobileTopBar({ track, liked, onLike, onShare, onDownload }: TrackActionsProps) {
+const MobileTopBar = memo(function MobileTopBar({ track, liked, commentsCount, onLike, onShare, onComments, onDownload }: TrackActionsProps) {
   const { active } = trackColors(track);
 
   return (
@@ -203,6 +210,9 @@ const MobileTopBar = memo(function MobileTopBar({ track, liked, onLike, onShare,
         <MenuItem icon={<Share2 aria-hidden="true" />} onSelect={onShare}>
           Поделиться
         </MenuItem>
+        <MenuItem icon={<MessageCircle aria-hidden="true" />} onSelect={onComments}>
+          Отзывы ({commentsCount})
+        </MenuItem>
         <MenuItem icon={<Download aria-hidden="true" />} onSelect={onDownload}>
           Скачать видео
         </MenuItem>
@@ -218,13 +228,14 @@ function PlayerView({ track }: { track: Karaoke }) {
   const liked = likedIds?.includes(track.id) ?? false;
   const { show } = useToast();
   const [downloadOpen, setDownloadOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const commentsCount = useStoredComments(track.id)?.length ?? 0;
 
   const lines = useMemo(() => cleanLines(track.lyrics), [track.lyrics]);
   const duration = Number.isFinite(track.duration) && track.duration > 0 ? track.duration : trackDuration(lines);
   const playback = usePlayback({ duration, preset: track.audioPreset });
   const { play, pause, seek, skip, toggle } = playback;
   const colors = trackColors(track);
-  const aspect = track.style?.aspectRatio;
 
   const like = useCallback(() => {
     toggleKaraokeLike(track.id, userId);
@@ -239,13 +250,13 @@ function PlayerView({ track }: { track: Karaoke }) {
     }
   }, [show]);
 
-  // The exporter plays the backing track itself, so the player falls silent first. It never sets the
-  // volume, so the player's mute or slider level must not carry over into the recording.
+  // The exporter plays the backing track itself (at its own level), so the player falls silent first.
   const openDownload = useCallback(() => {
     pause();
-    synthPlayer?.setVolume(SYNTH_DEFAULT_GAIN);
     setDownloadOpen(true);
   }, [pause]);
+
+  const openComments = useCallback(() => setCommentsOpen(true), []);
 
   const seekLine = useCallback(
     (index: number) => {
@@ -259,7 +270,6 @@ function PlayerView({ track }: { track: Karaoke }) {
 
   // Space plays/pauses, ←/→ skip 5 s. Not while typing, in a menu or under a dialog.
   useEffect(() => {
-    if (downloadOpen) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
       if (isEditableTarget(event.target) || document.querySelector('dialog[open]')) return;
@@ -274,7 +284,7 @@ function PlayerView({ track }: { track: Karaoke }) {
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [downloadOpen, skip, toggle]);
+  }, [skip, toggle]);
 
   return (
     <section data-player className="relative isolate min-h-dvh" style={{ backgroundColor: colors.background, color: colors.text }}>
@@ -286,10 +296,26 @@ function PlayerView({ track }: { track: Karaoke }) {
         }}
       />
 
-      <MobileTopBar track={track} liked={liked} onLike={like} onShare={share} onDownload={openDownload} />
+      <MobileTopBar
+        track={track}
+        liked={liked}
+        commentsCount={commentsCount}
+        onLike={like}
+        onShare={share}
+        onComments={openComments}
+        onDownload={openDownload}
+      />
 
       <div className={CONTENT_GRID}>
-        <TrackAside track={track} liked={liked} onLike={like} onShare={share} onDownload={openDownload} />
+        <TrackAside
+          track={track}
+          liked={liked}
+          commentsCount={commentsCount}
+          onLike={like}
+          onShare={share}
+          onComments={openComments}
+          onDownload={openDownload}
+        />
         <LyricsView
           lines={lines}
           time={playback.time}
@@ -304,12 +330,11 @@ function PlayerView({ track }: { track: Karaoke }) {
 
       <PlayerControls playback={playback} duration={duration} accent={colors.active} />
 
-      <VideoDownloaderModal
-        karaoke={track}
-        isOpen={downloadOpen}
-        onClose={() => setDownloadOpen(false)}
-        initialFormat={aspect === '16:9' || aspect === 'h' ? 'landscape' : 'reel'}
-      />
+      <VideoDownloaderModal karaoke={track} open={downloadOpen} onClose={() => setDownloadOpen(false)} />
+
+      <Modal open={commentsOpen} onClose={() => setCommentsOpen(false)} title="Отзывы" placement="side">
+        <CommentsSection karaokeId={track.id} />
+      </Modal>
     </section>
   );
 }
