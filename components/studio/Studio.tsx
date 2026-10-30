@@ -232,8 +232,8 @@ export function Studio() {
         </aside>
       </div>
 
-      {/* The bar would cover the end of the page, so the footer under the studio makes room for it. */}
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-ink/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl [body:has(&)_footer]:pb-[calc(68px+env(safe-area-inset-bottom))]">
+      {/* The bar would cover the end of the page, so the site footer (a direct child of <body>, unlike a dialog's) makes room for it. */}
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-ink/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl [body:has(&)>footer]:pb-[calc(68px+env(safe-area-inset-bottom))]">
         <div className="wrap flex h-[68px] items-center justify-between gap-3">
           <p className="hidden text-[14px] text-fg-muted tabular-nums sm:block">{status}</p>
           <div className="flex flex-1 items-center gap-2 sm:flex-none sm:gap-3">
