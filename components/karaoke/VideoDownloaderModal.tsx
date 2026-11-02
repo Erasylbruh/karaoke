@@ -287,6 +287,10 @@ function ExportBody({ track, initialFormat }: { track: Karaoke; initialFormat: E
     const ctx = canvas?.getContext('2d');
     if (!mimeType || !canvas || !ctx || recordingRef.current) return;
 
+    // Taken before the first await: Safari only lets the audio graph start inside the click that began the recording.
+    // The tap on the synth's output is shared by every recording, so its audio track is never stopped.
+    const audio = synthPlayer?.getMediaStreamDestination();
+
     const run: Recording = { discarded: false, frame: 0, recorder: null, videoTracks: [] };
     recordingRef.current = run;
     setVideoUrl(null);
@@ -298,19 +302,21 @@ function ExportBody({ track, initialFormat }: { track: Karaoke; initialFormat: E
 
     const source: FrameSource = { track, lines, format, duration: recordSeconds };
     drawFrame(ctx, source, 0);
-    const canvasStream = canvas.captureStream(30);
-    run.videoTracks = canvasStream.getVideoTracks();
-    // The tap on the synth's output is shared by every recording, so its audio track is never stopped.
-    const audio = synthPlayer?.getMediaStreamDestination();
-    const stream = new MediaStream([...run.videoTracks, ...(audio?.stream.getAudioTracks() ?? [])]);
-
-    let recorder: MediaRecorder;
-    try {
-      recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3_000_000 });
-    } catch {
+    // Any of these can throw on a browser that only half supports recording; that ends in the 'unsupported' state, not a stuck 'recording'.
+    const giveUp = () => {
       discardRecording(run);
       recordingRef.current = null;
       changePhase('unsupported');
+    };
+
+    let recorder: MediaRecorder;
+    try {
+      const canvasStream = canvas.captureStream(30);
+      run.videoTracks = canvasStream.getVideoTracks();
+      const stream = new MediaStream([...run.videoTracks, ...(audio?.stream.getAudioTracks() ?? [])]);
+      recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3_000_000 });
+    } catch {
+      giveUp();
       return;
     }
     run.recorder = recorder;
@@ -328,7 +334,12 @@ function ExportBody({ track, initialFormat }: { track: Karaoke; initialFormat: E
       changePhase('done');
     };
 
-    recorder.start(100);
+    try {
+      recorder.start(100);
+    } catch {
+      giveUp();
+      return;
+    }
     synthPlayer?.setVolume(RECORD_GAIN);
     synthPlayer?.playPreset(track.audioPreset ?? 'synthwave', 0);
 
