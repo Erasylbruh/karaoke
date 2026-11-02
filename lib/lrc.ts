@@ -24,8 +24,8 @@ function parseLine(line: string): { times: number[]; text: string } {
  */
 export function parseLrc(text: string): LyricLine[] {
   const found: { time: number; text: string }[] = [];
-  for (const line of text.replace(/^﻿/, '').split(/\r?\n/)) {
-    const { times, text: lyric } = parseLine(line);
+  for (const line of text.replace(/^\uFEFF/, '').split(/\r\n|\r|\n/)) {
+    const { times, text: lyric } = parseLine(line.trimStart());
     if (lyric === '') continue;
     for (const time of times) found.push({ time, text: lyric });
   }

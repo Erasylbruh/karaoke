@@ -9,10 +9,18 @@ test('parseLrc reads lines and skips metadata, junk and empty text', () => {
 });
 
 test('parseLrc handles CRLF, BOM, milliseconds and several stamps per line', () => {
-  const text = '﻿[00:10.00]Второй\r\n[00:01.234][00:20.00] Припев\r\n';
+  const text = '\uFEFF[00:10.00]Второй\r\n[00:01.234][00:20.00] Припев\r\n';
   assert.deepEqual(parseLrc(text).map((l) => [l.time, l.text]), [
     [1.234, 'Припев'], [10, 'Второй'], [20, 'Припев'],
   ]);
+});
+
+test('parseLrc keeps lines that start with spaces', () => {
+  assert.deepEqual(parseLrc('  [00:02.00] Строка').map((l) => [l.time, l.text]), [[2, 'Строка']]);
+});
+
+test('parseLrc splits on a lone CR as well', () => {
+  assert.deepEqual(parseLrc('[00:01.00] А\r[00:02.00] Б').map((l) => [l.time, l.text]), [[1, 'А'], [2, 'Б']]);
 });
 
 test('formatLrcTimestamp rounds to centiseconds', () => {
