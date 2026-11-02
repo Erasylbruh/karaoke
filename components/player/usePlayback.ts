@@ -147,9 +147,11 @@ export function usePlayback({ duration, preset }: { duration: number; preset?: K
   }, [applyVolume]);
 
   // Leaving the page stops the clock and the sound and gives the synth back its default gain.
+  // The synth is shared, so only an instance that was playing stops it: an idle one unmounting
+  // (e.g. the studio's tab swap) must not cut the sound another instance started.
   useEffect(
     () => () => {
-      halt();
+      if (playingRef.current) halt();
       synthPlayer?.setVolume(SYNTH_DEFAULT_GAIN);
     },
     [halt],
