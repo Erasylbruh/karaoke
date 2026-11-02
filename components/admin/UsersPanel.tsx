@@ -52,15 +52,20 @@ function RoleBadge({ role }: { role: User['role'] }) {
 
 function Manage({ user, currentUserId, onDelete }: RowProps) {
   const admin = user.role === 'admin';
+  const self = user.id === currentUserId;
   return (
-    <div className="flex items-center gap-2">
-      <Button variant="secondary" size="sm" onClick={() => updateUserRole(user.id, admin ? 'user' : 'admin')}>
-        {admin ? 'Снять админа' : 'Сделать админом'}
-      </Button>
-      {user.id !== currentUserId && (
-        <IconButton label="Удалить пользователя" variant="danger" size="sm" onClick={() => onDelete(user)}>
-          <Trash2 aria-hidden="true" />
-        </IconButton>
+    <div className="flex flex-wrap items-center gap-2">
+      {self ? (
+        <span className="text-[13px] text-fg-subtle">Это вы</span>
+      ) : (
+        <>
+          <Button variant="secondary" size="sm" onClick={() => updateUserRole(user.id, admin ? 'user' : 'admin')}>
+            {admin ? 'Снять админа' : 'Сделать админом'}
+          </Button>
+          <IconButton label="Удалить пользователя" variant="danger" size="sm" onClick={() => onDelete(user)}>
+            <Trash2 aria-hidden="true" />
+          </IconButton>
+        </>
       )}
     </div>
   );
@@ -87,10 +92,10 @@ export function UsersPanel({ users, currentUserId }: { users: User[]; currentUse
         <table className="w-full table-fixed border-collapse">
           <colgroup>
             <col className="w-[22%]" />
-            <col className="w-[24%]" />
+            <col className="w-[22%]" />
+            <col className="w-[12%]" />
             <col className="w-[14%]" />
-            <col className="w-[14%]" />
-            <col className="w-[26%]" />
+            <col className="w-[30%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line">

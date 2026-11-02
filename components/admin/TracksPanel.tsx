@@ -79,7 +79,7 @@ function StatusChip({ track }: { track: Karaoke }) {
 
 function Actions({ track, onDelete }: RowProps) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <Link href={`/karaoke/${track.id}`} aria-label="Открыть трек" title="Открыть трек" className={iconButtonStyles({ size: 'sm' })}>
         <ExternalLink aria-hidden="true" />
       </Link>
@@ -140,11 +140,11 @@ export function TracksPanel({ karaokes }: { karaokes: Karaoke[] }) {
           <div className="mt-4 hidden overflow-hidden rounded-2xl border border-line bg-surface-1 md:block">
             <table className="w-full table-fixed border-collapse">
               <colgroup>
-                <col className="w-[40%]" />
+                <col className="w-[36%]" />
                 <col className="w-[16%]" />
                 <col className="w-[14%]" />
                 <col className="w-[18%]" />
-                <col className="w-[12%]" />
+                <col className="w-[16%]" />
               </colgroup>
               <thead>
                 <tr className="border-b border-line">
