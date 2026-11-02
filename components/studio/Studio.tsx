@@ -11,7 +11,7 @@ import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/context/AuthContext';
 import type { StyleFontKey } from '@/lib/fonts';
 import { formatTime, plural } from '@/lib/format';
-import { toLrc } from '@/lib/lrc';
+import { parseLrc, toLrc } from '@/lib/lrc';
 import { trackDuration } from '@/lib/lyrics';
 import { PROTOTYPE_LYRICS } from '@/lib/mock-data';
 import { PALETTES } from '@/lib/palettes';
@@ -142,6 +142,12 @@ export function Studio() {
     if (!draft.title.trim()) {
       setTitleError('Введите название');
       titleRef.current?.focus();
+      return;
+    }
+    if (parseLrc(draft.lrcText).length === 0) {
+      // The draft keeps its last good lyrics when the text has no timed lines; publishing those would be stale.
+      setLyricsMode('lrc');
+      show('Нет строк с таймингом — проверьте текст LRC', 'error');
       return;
     }
     setPublishing(true);
