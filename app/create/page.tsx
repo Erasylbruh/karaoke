@@ -1,16 +1,11 @@
-import React from 'react';
-import { Metadata } from 'next';
-import KaraokeCreator from '@/components/karaoke/KaraokeCreator';
+import type { Metadata } from 'next';
+import { Studio } from '@/components/studio/Studio';
 
 export const metadata: Metadata = {
-  title: 'Создать караоке — KaraokeCraft',
+  title: 'Студия',
   description: 'Создайте свою караоке-анимацию в стиле Spotify Lyrics с настройкой цвета, шрифта, фона и таймингов.',
 };
 
 export default function CreateKaraokePage() {
-  return (
-    <div className="min-h-screen bg-[#08080d]">
-      <KaraokeCreator />
-    </div>
-  );
+  return <Studio />;
 }

@@ -1,120 +1,126 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useMemo } from 'react';
 import { User } from '../lib/types';
 import { getCurrentUser, setCurrentUser, getUsers, saveUser } from '../lib/storage';
+import { useStoredCurrentUser } from '../lib/store';
+import { buildUserFromIdentifier, findUserByIdentifier, normalizeUsername, uniqueUsername } from '../lib/login';
+
+export type AuthStatus = 'loading' | 'guest' | 'user';
+
+export type RegisterResult =
+  | { ok: true; user: User }
+  | { ok: false; field: 'email' | 'username'; message: string };
 
 interface AuthContextType {
   user: User | null;
-  isAuthenticated: boolean;
+  status: AuthStatus;
   isAdmin: boolean;
-  isLoading: boolean;
-  login: (email: string, password?: string) => Promise<boolean>;
-  register: (data: { username: string; name: string; email: string; avatar?: string; bio?: string }) => Promise<boolean>;
-  logout: () => void;
-  switchUser: (userId: string) => void;
-  updateProfile: (data: Partial<User>) => void;
+  isAuthenticated: boolean; // совместимость со старыми страницами
+  isLoading: boolean; // совместимость со старыми страницами
+  login(identifier: string, password?: string): User;
+  register(data: { username?: string; name: string; email: string }): RegisterResult;
+  logout(): void;
+  switchUser(userId: string): void;
+  updateProfile(data: Partial<Pick<User, 'name' | 'bio' | 'avatar'>>): void;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+/** Signs in an existing user by email or username, or creates one for an identifier nobody has used. The password is not checked (demo). */
+function login(identifier: string): User {
+  const value = identifier.trim();
+  if (value === '' || value.startsWith('@')) {
+    throw new Error('Введите имя пользователя или email');
+  }
+  const users = getUsers();
+  let user = findUserByIdentifier(users, value);
+  if (!user) {
+    user = buildUserFromIdentifier(value, users, 'user-' + Date.now(), new Date().toISOString());
+    saveUser(user);
+  }
+  setCurrentUser(user);
+  return user;
+}
+
+function register(data: { username?: string; name: string; email: string }): RegisterResult {
+  const users = getUsers();
+  const email = data.email.trim().toLowerCase();
+  if (users.some((u) => u.email.toLowerCase() === email)) {
+    return { ok: false, field: 'email', message: 'Этот email уже зарегистрирован' };
+  }
+
+  let username: string;
+  const requested = data.username?.trim();
+  if (requested) {
+    username = normalizeUsername(requested);
+    if (users.some((u) => u.username.toLowerCase() === username)) {
+      return { ok: false, field: 'username', message: 'Имя пользователя занято' };
+    }
+  } else {
+    username = uniqueUsername(normalizeUsername(email.split('@')[0]), users);
+  }
+
+  const user: User = {
+    id: 'user-' + Date.now(),
+    username,
+    name: data.name.trim(),
+    email,
+    avatar: '',
+    bio: '',
+    role: 'user',
+    createdAt: new Date().toISOString(),
+  };
+  saveUser(user);
+  setCurrentUser(user);
+  return { ok: true, user };
+}
+
+function logout(): void {
+  setCurrentUser(null);
+}
+
+function switchUser(userId: string): void {
+  const target = getUsers().find((u) => u.id === userId);
+  if (target) setCurrentUser(target);
+}
+
+function updateProfile(data: Partial<Pick<User, 'name' | 'bio' | 'avatar'>>): void {
+  const current = getCurrentUser();
+  if (!current) return;
+  const updated: User = { ...current, ...data };
+  saveUser(updated);
+  setCurrentUser(updated);
+}
+
+const ACTIONS = { login, register, logout, switchUser, updateProfile };
+
+const AuthContext = createContext<typeof ACTIONS | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    // Hydrate current user on client mount
-    const saved = getCurrentUser();
-    setUser(saved);
-    setIsLoading(false);
-  }, []);
-
-  const login = async (email: string): Promise<boolean> => {
-    const users = getUsers();
-    const found = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-    if (found) {
-      setUser(found);
-      setCurrentUser(found);
-      return true;
-    }
-    // If user not found, create a simple profile
-    const newUser: User = {
-      id: 'user-' + Date.now(),
-      username: email.split('@')[0],
-      name: email.split('@')[0],
-      email: email,
-      avatar: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80`,
-      role: email.includes('admin') ? 'admin' : 'user',
-      createdAt: new Date().toISOString(),
-    };
-    saveUser(newUser);
-    setUser(newUser);
-    setCurrentUser(newUser);
-    return true;
-  };
-
-  const register = async (data: { username: string; name: string; email: string; avatar?: string; bio?: string }): Promise<boolean> => {
-    const newUser: User = {
-      id: 'user-' + Date.now(),
-      username: data.username.toLowerCase().replace(/\s+/g, '_'),
-      name: data.name,
-      email: data.email,
-      avatar: data.avatar || `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80`,
-      bio: data.bio || '',
-      role: 'user',
-      createdAt: new Date().toISOString(),
-    };
-    saveUser(newUser);
-    setUser(newUser);
-    setCurrentUser(newUser);
-    return true;
-  };
-
-  const logout = () => {
-    setUser(null);
-    setCurrentUser(null);
-  };
-
-  const switchUser = (userId: string) => {
-    const users = getUsers();
-    const target = users.find((u) => u.id === userId);
-    if (target) {
-      setUser(target);
-      setCurrentUser(target);
-    }
-  };
-
-  const updateProfile = (data: Partial<User>) => {
-    if (!user) return;
-    const updated: User = { ...user, ...data };
-    setUser(updated);
-    saveUser(updated);
-    setCurrentUser(updated);
-  };
-
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated: !!user,
-        isAdmin: user?.role === 'admin',
-        isLoading,
-        login,
-        register,
-        logout,
-        switchUser,
-        updateProfile,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={ACTIONS}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
+/**
+ * Each consumer reads the current user itself. If the provider held it, the client value would reach
+ * Suspense boundaries that have not hydrated yet (the header) through context and break hydration.
+ */
+export function useAuth(): AuthContextType {
+  const actions = useContext(AuthContext);
+  const stored = useStoredCurrentUser();
+  const value = useMemo<AuthContextType | undefined>(() => {
+    if (!actions) return undefined;
+    const user = stored ?? null;
+    const status: AuthStatus = stored === undefined ? 'loading' : stored === null ? 'guest' : 'user';
+    return {
+      ...actions,
+      user,
+      status,
+      isAdmin: user?.role === 'admin',
+      isAuthenticated: user !== null,
+      isLoading: status === 'loading',
+    };
+  }, [actions, stored]);
+  if (!value) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
-  return context;
+  return value;
 }
