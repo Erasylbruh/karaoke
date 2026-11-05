@@ -1,152 +1,162 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { MessageSquare, Send, Trash2 } from 'lucide-react';
-import { Comment } from '@/lib/types';
+import { useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { Send, Trash2 } from 'lucide-react';
+import { Avatar } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import { Field, Input, Textarea } from '@/components/ui/field';
+import { IconButton } from '@/components/ui/icon-button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/context/AuthContext';
-import { getComments, addComment, deleteComment } from '@/lib/storage';
+import { formatDate, plural } from '@/lib/format';
+import { addComment, deleteComment } from '@/lib/storage';
+import { useStoredComments } from '@/lib/store';
 
 interface CommentsSectionProps {
   karaokeId: string;
 }
 
+/** Reviews of a track: the form and the list, newest first. Has no frame of its own. */
 export default function CommentsSection({ karaokeId }: CommentsSectionProps) {
   const { user, isAdmin } = useAuth();
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [text, setText] = useState('');
+  const comments = useStoredComments(karaokeId);
   const [guestName, setGuestName] = useState('');
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string>();
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const listHeadingRef = useRef<HTMLHeadingElement>(null);
+  const listHeadingId = useId();
 
-  useEffect(() => {
-    setComments(getComments(karaokeId));
-  }, [karaokeId]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!text.trim()) return;
-
-    const newComment: Comment = {
-      id: 'comm-' + Date.now(),
-      karaokeId,
-      userId: user?.id || 'guest-' + Date.now(),
-      userName: user?.name || guestName.trim() || 'Гость',
-      userAvatar: user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-      content: text.trim(),
-      createdAt: new Date().toISOString(),
-    };
-
-    const saved = addComment(newComment);
-    setComments([saved, ...comments]);
-    setText('');
-  };
-
-  const handleDelete = (commentId: string) => {
-    deleteComment(commentId);
-    setComments(comments.filter((c) => c.id !== commentId));
-  };
-
-  const formatDate = (isoStr: string) => {
-    try {
-      const d = new Date(isoStr);
-      return d.toLocaleDateString('ru-RU', {
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } catch {
-      return 'Только что';
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = text.trim();
+    if (!content) {
+      setError('Напишите отзыв');
+      textRef.current?.focus();
+      return;
     }
-  };
+    const now = Date.now();
+    addComment({
+      id: `comm-${now}`,
+      karaokeId,
+      userId: user?.id ?? `guest-${now}`,
+      userName: user?.name ?? (guestName.trim() || 'Гость'),
+      userAvatar: user?.avatar ?? '',
+      content,
+      createdAt: new Date(now).toISOString(),
+    });
+    setText('');
+    setError(undefined);
+  }
+
+  // Ctrl/⌘+Enter sends from the text field.
+  function onTextKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
+  function remove(id: string) {
+    deleteComment(id);
+    // The pressed button disappears; keep focus inside the dialog, on the list.
+    listHeadingRef.current?.focus();
+  }
 
   return (
-    <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-5 md:p-6 space-y-5">
-      <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="w-4 h-4 text-zinc-400" />
-          <h3 className="font-semibold text-base text-zinc-100">
-            Комментарии ({comments.length})
-          </h3>
-        </div>
-      </div>
-
-      {/* Add Comment Form */}
-      <form onSubmit={handleSubmit} className="space-y-3">
+    <div className="space-y-6">
+      <form onSubmit={submit} noValidate className="space-y-3">
         {!user && (
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Ваше имя"
-              value={guestName}
-              onChange={(e) => setGuestName(e.target.value)}
-              className="w-full sm:w-64 px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-green-500"
-            />
-          </div>
+          <Field label="Имя">
+            {(control) => (
+              <Input
+                {...control}
+                value={guestName}
+                onChange={(event) => setGuestName(event.target.value)}
+                placeholder="Как вас зовут?"
+                autoComplete="nickname"
+                maxLength={40}
+              />
+            )}
+          </Field>
         )}
-
-        <div className="space-y-2">
-          <textarea
-            rows={2}
-            placeholder="Оставьте комментарий..."
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            className="w-full p-3 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-green-500 transition-colors resize-none"
-          />
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={!text.trim()}
-              className="px-4 py-2 rounded-lg bg-green-500 hover:bg-green-600 text-black font-medium text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
-            >
-              <Send className="w-3.5 h-3.5" />
-              Отправить
-            </button>
-          </div>
+        <Field label="Отзыв" error={error}>
+          {(control) => (
+            <Textarea
+              {...control}
+              ref={textRef}
+              rows={3}
+              value={text}
+              onChange={(event) => {
+                setText(event.target.value);
+                if (error && event.target.value.trim()) setError(undefined);
+              }}
+              onKeyDown={onTextKeyDown}
+              placeholder="Что вы думаете о треке?"
+              maxLength={1000}
+            />
+          )}
+        </Field>
+        <div className="flex justify-end">
+          <Button type="submit" variant="primary" size="sm" icon={<Send aria-hidden="true" />}>
+            Отправить
+          </Button>
         </div>
       </form>
 
-      {/* Comments List */}
-      <div className="space-y-3 pt-1">
-        {comments.length === 0 ? (
-          <div className="text-center py-6 text-zinc-500 text-xs">
-            Нет комментариев. Будьте первым!
-          </div>
-        ) : (
-          comments.map((comm) => {
-            const canDelete = isAdmin || (user && user.id === comm.userId);
-            return (
-              <div
-                key={comm.id}
-                className="p-3.5 rounded-lg bg-zinc-950 border border-zinc-800 flex items-start justify-between gap-3"
-              >
-                <div className="flex items-start gap-2.5">
-                  <img
-                    src={comm.userAvatar}
-                    alt={comm.userName}
-                    className="w-7 h-7 rounded-full object-cover border border-zinc-700 shrink-0"
-                  />
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-xs text-zinc-200">{comm.userName}</span>
-                      <span className="text-[10px] text-zinc-500">{formatDate(comm.createdAt)}</span>
-                    </div>
-                    <p className="text-xs text-zinc-300 leading-relaxed break-words">{comm.content}</p>
-                  </div>
-                </div>
+      <section aria-labelledby={listHeadingId}>
+        <h3
+          ref={listHeadingRef}
+          id={listHeadingId}
+          tabIndex={-1}
+          className="text-[13px] font-semibold tracking-wide text-fg-subtle uppercase outline-none"
+        >
+          {comments ? plural(comments.length, ['отзыв', 'отзыва', 'отзывов']) : 'Отзывы'}
+        </h3>
 
-                {canDelete && (
-                  <button
-                    onClick={() => handleDelete(comm.id)}
-                    className="p-1 rounded text-zinc-500 hover:text-red-400 transition-colors"
-                    title="Удалить"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
+        {comments === null ? (
+          <div aria-busy="true" className="mt-2 space-y-4 pt-2">
+            {[0, 1].map((index) => (
+              <div key={index} className="flex gap-3">
+                <Skeleton className="size-8 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-4 w-full" />
+                </div>
               </div>
-            );
-          })
+            ))}
+          </div>
+        ) : comments.length === 0 ? (
+          <p className="mt-3 text-[14px] text-fg-muted">Пока нет отзывов. Будьте первым!</p>
+        ) : (
+          <ul className="mt-1">
+            {comments.map((comment) => {
+              const canDelete = isAdmin || (!!user && user.id === comment.userId);
+              return (
+                <li key={comment.id} className="flex items-start gap-3 border-t border-line py-4 first:border-t-0">
+                  <Avatar name={comment.userName || 'Гость'} src={comment.userAvatar || undefined} size={32} />
+                  <div className="min-w-0 flex-1">
+                    <p className="flex flex-wrap items-baseline gap-x-2 leading-snug">
+                      <span className="min-w-0 truncate text-[14px] font-semibold text-fg">{comment.userName || 'Гость'}</span>
+                      <time dateTime={comment.createdAt} className="text-[13px] text-fg-subtle">
+                        {formatDate(comment.createdAt)}
+                      </time>
+                    </p>
+                    <p className="mt-1 text-[14px] leading-relaxed whitespace-pre-line text-fg-muted [overflow-wrap:anywhere]">
+                      {comment.content}
+                    </p>
+                  </div>
+                  {canDelete && (
+                    <IconButton label="Удалить отзыв" variant="ghost" size="sm" onClick={() => remove(comment.id)} className="-mt-1 -mr-1.5">
+                      <Trash2 aria-hidden="true" />
+                    </IconButton>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         )}
-      </div>
+      </section>
     </div>
   );
 }

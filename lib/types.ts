@@ -8,6 +8,9 @@ export interface LyricLine {
 export type FontFamily = 
   | 'Onest'
   | 'Unbounded'
+  | 'Playfair'
+  | 'Caveat'
+  | 'Russo'
   | 'Georgia'
   | 'Mono'
   | 'Inter'

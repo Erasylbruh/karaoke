@@ -10,6 +10,9 @@ export class BackingTrackSynthesizer {
   private loopInterval: number | null = null;
   private startTime = 0;
   private masterGain: GainNode | null = null;
+  // Each playPreset gets its own gain between its notes and masterGain, so stop() can silence
+  // notes already scheduled ahead and a new session never stacks on top of the old one.
+  private sessionGain: GainNode | null = null;
   private destNode: MediaStreamAudioDestinationNode | null = null;
 
   private initContext() {
@@ -47,6 +50,8 @@ export class BackingTrackSynthesizer {
     if (!this.ctx || !this.masterGain) return;
 
     this.stop();
+    this.sessionGain = this.ctx.createGain();
+    this.sessionGain.connect(this.masterGain);
     this.isPlaying = true;
     this.currentPreset = preset;
     this.startTime = this.ctx.currentTime - startOffsetSec;
@@ -102,7 +107,7 @@ export class BackingTrackSynthesizer {
   }
 
   private playKick(t: number) {
-    if (!this.ctx || !this.masterGain) return;
+    if (!this.ctx || !this.sessionGain) return;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
 
@@ -113,14 +118,14 @@ export class BackingTrackSynthesizer {
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
 
     osc.connect(gain);
-    gain.connect(this.masterGain);
+    gain.connect(this.sessionGain);
 
     osc.start(t);
     osc.stop(t + 0.35);
   }
 
   private playSnare(t: number) {
-    if (!this.ctx || !this.masterGain) return;
+    if (!this.ctx || !this.sessionGain) return;
     
     // Noise buffer
     const bufferSize = this.ctx.sampleRate * 0.15;
@@ -143,14 +148,14 @@ export class BackingTrackSynthesizer {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(this.masterGain);
+    gain.connect(this.sessionGain);
 
     noise.start(t);
     noise.stop(t + 0.15);
   }
 
   private playHiHat(t: number) {
-    if (!this.ctx || !this.masterGain) return;
+    if (!this.ctx || !this.sessionGain) return;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
     osc.type = 'square';
@@ -160,14 +165,14 @@ export class BackingTrackSynthesizer {
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
 
     osc.connect(gain);
-    gain.connect(this.masterGain);
+    gain.connect(this.sessionGain);
 
     osc.start(t);
     osc.stop(t + 0.04);
   }
 
   private playBass(t: number, freq: number, duration: number) {
-    if (!this.ctx || !this.masterGain) return;
+    if (!this.ctx || !this.sessionGain) return;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
     const filter = this.ctx.createBiquadFilter();
@@ -183,19 +188,19 @@ export class BackingTrackSynthesizer {
 
     osc.connect(filter);
     filter.connect(gain);
-    gain.connect(this.masterGain);
+    gain.connect(this.sessionGain);
 
     osc.start(t);
     osc.stop(t + duration);
   }
 
   private playPad(t: number, rootFreq: number, duration: number) {
-    if (!this.ctx || !this.masterGain) return;
+    if (!this.ctx || !this.sessionGain) return;
     
     // Play a minor triad
     const freqs = [rootFreq, rootFreq * 1.189, rootFreq * 1.498];
     freqs.forEach((f) => {
-      if (!this.ctx || !this.masterGain) return;
+      if (!this.ctx || !this.sessionGain) return;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       const filter = this.ctx.createBiquadFilter();
@@ -212,7 +217,7 @@ export class BackingTrackSynthesizer {
 
       osc.connect(filter);
       filter.connect(gain);
-      gain.connect(this.masterGain);
+      gain.connect(this.sessionGain);
 
       osc.start(t);
       osc.stop(t + duration);
@@ -224,6 +229,16 @@ export class BackingTrackSynthesizer {
     if (this.loopInterval) {
       clearInterval(this.loopInterval);
       this.loopInterval = null;
+    }
+    // A short fade avoids a click; then the session's notes are cut off from the output.
+    const session = this.sessionGain;
+    this.sessionGain = null;
+    if (session && this.ctx) {
+      const now = this.ctx.currentTime;
+      session.gain.cancelScheduledValues(now);
+      session.gain.setValueAtTime(session.gain.value, now);
+      session.gain.linearRampToValueAtTime(0, now + 0.03);
+      window.setTimeout(() => session.disconnect(), 60);
     }
   }
 

@@ -1,7 +1,7 @@
 import { Karaoke, Comment, User } from './types';
 import { INITIAL_KARAOKES, INITIAL_COMMENTS, INITIAL_USERS } from './mock-data';
 
-const STORAGE_KEYS = {
+export const STORAGE_KEYS = {
   KARAOKES: 'karaokecraft_karaokes',
   COMMENTS: 'karaokecraft_comments',
   USERS: 'karaokecraft_users',
@@ -27,6 +27,33 @@ function safeSetItem<T>(key: string, value: T): void {
   } catch (e) {
     console.error(`Error writing ${key} to storage:`, e);
   }
+  notify();
+}
+
+// ---------------- SUBSCRIPTIONS ----------------
+
+const listeners = new Set<() => void>();
+let seeded = false;
+
+function notify(): void {
+  listeners.forEach((listener) => listener());
+}
+
+/** Calls `onChange` after every write in this tab and on `storage` events from other tabs. Seeds missing keys on the first subscription. */
+export function subscribeStorage(onChange: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  listeners.add(onChange);
+  if (listeners.size === 1) window.addEventListener('storage', notify);
+  if (!seeded) {
+    seeded = true;
+    getKaraokes();
+    getUsers();
+    getComments('');
+  }
+  return () => {
+    listeners.delete(onChange);
+    if (listeners.size === 0) window.removeEventListener('storage', notify);
+  };
 }
 
 // ---------------- KARAOKES ----------------
