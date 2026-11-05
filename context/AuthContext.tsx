@@ -39,8 +39,6 @@ interface AuthContextType {
   authPrompt: { open: boolean; reason?: string };
   closeAuthPrompt: () => void;
   login: (identifier: string, password: string) => Promise<AuthResult>;
-  /** Signs in as a seeded demo profile, creating its Firebase Auth account on first use. */
-  loginDemo: (tag: string) => Promise<AuthResult>;
   register: (data: RegisterData) => Promise<AuthResult>;
   logout: () => void;
   updateProfile: (data: Partial<User>) => AuthResult;
@@ -50,7 +48,6 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const DEFAULT_AVATAR =
   'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80';
-const DEMO_PASSWORD = 'karaoke-demo-2026';
 
 /** false while hydrating (matches the server render), true afterwards. */
 const noopSubscribe = () => () => {};
@@ -137,22 +134,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const loginDemo = async (tag: string): Promise<AuthResult> => {
-    const profile = getUserByUsername(tag);
-    if (!profile) return { ok: false, error: 'Демо-профиль не найден в базе' };
-    try {
-      const cred = await signInWithEmailAndPassword(auth, profile.email, DEMO_PASSWORD).catch(async (e) => {
-        if (String((e as { code?: string })?.code).match(/invalid-credential|user-not-found/)) {
-          return createUserWithEmailAndPassword(auth, profile.email, DEMO_PASSWORD);
-        }
-        throw e;
-      });
-      return finishSignIn(cred.user.uid, profile.email);
-    } catch (e) {
-      return { ok: false, error: authError(e) };
-    }
-  };
-
   const register = async (data: RegisterData): Promise<AuthResult> => {
     const tag = normalizeUsername(data.username);
     const tagError = validateUsername(tag);
@@ -204,7 +185,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         authPrompt,
         closeAuthPrompt: () => setAuthPrompt({ open: false }),
         login,
-        loginDemo,
         register,
         logout,
         updateProfile,

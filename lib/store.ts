@@ -6,7 +6,7 @@
  * to Firestore in the background. Fine for testing and small data; for production, move to
  * per-page queries and server-side counters (see docs/FIREBASE.md).
  */
-import { collection, doc, onSnapshot, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 
 type Doc = { id: string };
@@ -84,12 +84,8 @@ export const cols = {
 
 let started: Promise<void> | null = null;
 
-/**
- * Starts all listeners; resolves once every collection delivered its first server snapshot.
- * If Firestore is unreachable (database not created, rules deny, offline) it resolves anyway after
- * a timeout and fills the cache with demo data locally via `fallback`, so the UI stays usable.
- */
-export function startSync(seed: () => Promise<void>, fallback: () => void): Promise<void> {
+/** Starts all listeners; resolves once every collection delivered its first server snapshot (or after a timeout). */
+export function startSync(): Promise<void> {
   if (started) return started;
   started = new Promise<void>((resolve) => {
     const all = Object.values(cols);
@@ -99,7 +95,6 @@ export function startSync(seed: () => Promise<void>, fallback: () => void): Prom
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      if (syncErrors.length > 0 && cols.karaokes.map.size === 0) fallback();
       emit();
       resolve();
     };
@@ -107,14 +102,10 @@ export function startSync(seed: () => Promise<void>, fallback: () => void): Prom
       report('connect', 'Firestore не ответил за 12 секунд');
       finish();
     }, 12000);
-    const done = async (c: Col<Doc>) => {
+    const done = (c: Col<Doc>) => {
       if (c.loaded) return;
       c.loaded = true;
       if (--pending === 0) {
-        if (cols.karaokes.map.size === 0 && cols.users.map.size === 0 && syncErrors.length === 0) {
-          const timeout = new Promise<void>((_, rej) => setTimeout(() => rej(new Error('запись демо-данных не завершилась за 15 секунд')), 15000));
-          await Promise.race([seed(), timeout]).catch((e) => report('seed', e));
-        }
         finish();
       }
     };
@@ -140,15 +131,3 @@ export function startSync(seed: () => Promise<void>, fallback: () => void): Prom
   return started;
 }
 
-/** Writes many docs at once (used for the first-run seed). */
-export async function bulkWrite(items: { col: Col<Doc>; item: Doc }[]) {
-  for (let i = 0; i < items.length; i += 400) {
-    const batch = writeBatch(db);
-    items.slice(i, i + 400).forEach(({ col, item }) => {
-      col.map.set(item.id, item);
-      batch.set(doc(db, col.name, item.id), item);
-    });
-    await batch.commit();
-  }
-  emit();
-}

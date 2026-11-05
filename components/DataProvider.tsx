@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { startSync, subscribeStore, getStoreVersion, syncErrors } from '@/lib/store';
-import { seedDatabase, loadLocalDemo } from '@/lib/storage';
 
 /** Re-renders the caller whenever any Firestore collection changes. */
 export function useDataVersion() {
@@ -20,7 +19,7 @@ export default function DataProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     let alive = true;
-    void startSync(seedDatabase, loadLocalDemo).then(() => alive && setReady(true));
+    void startSync().then(() => alive && setReady(true));
     return () => {
       alive = false;
     };
@@ -35,7 +34,7 @@ export default function DataProvider({ children }: { children: React.ReactNode }
       )}
       {ready && syncErrors.length > 0 && (
         <div className="sync-err" role="alert">
-          <b>Нет связи с Firestore — показаны демо-данные, изменения не сохраняются.</b>{' '}
+          <b>Нет связи с Firestore — данные не загружены, изменения не сохраняются.</b>{' '}
           <span className="mu">{syncErrors[0]}. Создайте базу Firestore в Firebase Console и опубликуйте firestore.rules (docs/FIREBASE.md).</span>
         </div>
       )}

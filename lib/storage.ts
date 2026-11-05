@@ -16,8 +16,7 @@ import {
   DailyStat,
   StatType,
 } from './types';
-import { INITIAL_KARAOKES, INITIAL_COMMENTS, INITIAL_USERS } from './mock-data';
-import { cols, bulkWrite, Col } from './store';
+import { cols, Col } from './store';
 
 const LOCAL_KEYS = {
   GUEST: 'karaokecraft_v2_guest',
@@ -554,32 +553,3 @@ export function resetTutorials(userKey: string) {
   localSet(LOCAL_KEYS.TUTORIAL, m);
 }
 
-// ---------------- FIRST-RUN SEED ----------------
-
-/** Offline fallback: demo catalog in memory only (nothing is written). */
-export function loadLocalDemo() {
-  INITIAL_USERS.forEach((u) => U.map.set(u.id, { ...u, status: 'active' }));
-  INITIAL_KARAOKES.forEach((k) => K.map.set(k.id, k));
-  INITIAL_COMMENTS.forEach((c) => CM.map.set(c.id, c));
-}
-
-/** Fills an empty Firestore with the demo catalog and 30 days of chart data. */
-export async function seedDatabase() {
-  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-  const items: { col: Col<any>; item: any }[] = [];
-  INITIAL_USERS.forEach((u) => items.push({ col: U, item: { ...u, status: 'active' } }));
-  INITIAL_KARAOKES.forEach((k) => items.push({ col: K, item: k }));
-  INITIAL_COMMENTS.forEach((c) => items.push({ col: CM, item: c }));
-  const base: Record<StatType, number> = { listen: 40, follow: 1, download: 3 };
-  INITIAL_USERS.forEach((u, ui) => {
-    (Object.keys(base) as StatType[]).forEach((type) => {
-      for (let i = 29; i >= 0; i--) {
-        const day = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
-        const wave = 0.6 + 0.4 * Math.sin((i + ui * 5) / 4);
-        const count = Math.max(0, Math.round(base[type] * wave * (1 + (29 - i) / 40) + (Math.random() - 0.5) * base[type] * 0.4));
-        items.push({ col: ST, item: { id: `${u.id}_${type}_${day}`, authorId: u.id, type, day, count } });
-      }
-    });
-  });
-  await bulkWrite(items);
-}

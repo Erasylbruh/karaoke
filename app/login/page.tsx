@@ -7,7 +7,7 @@ import { useAuth } from '@/context/AuthContext';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, loginDemo } = useAuth();
+  const { login } = useAuth();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -60,14 +60,6 @@ export default function LoginPage() {
           {busy ? 'Входим…' : 'Войти'}
         </button>
       </form>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <p className="mu sm" style={{ margin: '0 0 10px' }}>Демо-профили (аккаунт в Firebase создаётся при первом входе):</p>
-        <div className="row">
-          <button className="bt sm" onClick={() => void run(loginDemo('liza_veter'))} disabled={busy}>@liza_veter (автор)</button>
-          <button className="bt sm" onClick={() => void run(loginDemo('admin'))} disabled={busy}>@admin (администратор)</button>
-        </div>
-      </div>
 
       <p className="mu sm" style={{ textAlign: 'center', marginTop: 18 }}>
         Нет аккаунта? <Link href="/register" style={{ color: 'var(--ac)' }}>Зарегистрироваться</Link>
