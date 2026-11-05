@@ -1,25 +1,28 @@
 export interface LyricLine {
   id: string;
-  time: number; // in seconds
+  time: number; // start, in seconds
+  end?: number; // end, in seconds (fill finishes here; long pauses don't slow the fill)
   text: string;
   duration?: number;
 }
 
-export type FontFamily = 
+export type FontFamily =
   | 'Onest'
   | 'Unbounded'
-  | 'Playfair'
-  | 'Caveat'
-  | 'Russo'
   | 'Georgia'
   | 'Mono'
   | 'Inter'
-  | 'Poppins'
-  | 'Montserrat'
+  | 'Outfit'
   | 'Space Grotesk'
-  | 'Outfit';
+  | 'Montserrat'
+  | 'Poppins'
+  | 'Roboto'
+  | 'Playfair Display'
+  | 'Bebas Neue'
+  | 'Oswald'
+  | 'Pacifico';
 
-export type BackgroundType = 
+export type BackgroundType =
   | 'mesh'
   | 'obsidian'
   | 'gradient'
@@ -31,18 +34,27 @@ export type FontSize = 'sm' | 'md' | 'lg' | 'xl' | number;
 
 export interface KaraokeStyle {
   font: FontFamily | string;
+  /** Reference to an uploaded font file (see lib/blob-store). Only set for custom fonts. */
+  fontFile?: string;
   textColor: string;        // Inactive text color
   activeColor: string;      // Active highlighted text color
   backgroundType?: BackgroundType;
   backgroundColor: string;  // Base background color
-  backgroundGradient?: string; // Optional gradient / mesh colors
-  backgroundImage?: string; // Custom uploaded image URL
+  backgroundGradient?: string;
+  backgroundImage?: string;
   fontSize?: FontSize;
   fontSizePx?: number;
+  /** Vertical centre of the lyrics block inside the frame, in percent (0-100). */
+  textY?: number;
   aspectRatio?: '9:16' | '16:9' | 'v' | 'h';
   coverIcon?: string;
+  /** Cover uploaded by the author (data URL or blob ref). */
   coverImage?: string;
 }
+
+/** public: in catalog; unlisted: only by link; private: author only */
+export type Visibility = 'public' | 'unlisted' | 'private';
+export type KaraokeStatus = 'active' | 'blocked' | 'deleted';
 
 export interface Karaoke {
   id: string;
@@ -51,6 +63,7 @@ export interface Karaoke {
   description: string;
   tags: string[];
   lyrics: LyricLine[];
+  /** Direct URL, or `idb:<id>` for audio uploaded by the author. */
   audioUrl?: string;
   audioPreset?: 'synthwave' | 'lofi' | 'pop' | 'cyberpunk' | 'chill' | 'rock';
   duration: number;         // Total duration in seconds
@@ -60,8 +73,11 @@ export interface Karaoke {
   authorAvatar?: string;
   likesCount: number;
   viewsCount: number;
-  recommendationScore?: number;
+  /** 0-100 recommendation score. Reaching RECOMMEND_THRESHOLD marks it as featured. */
+  recommendationScore: number;
   isFeatured?: boolean;
+  visibility: Visibility;
+  status: KaraokeStatus;
   createdAt: string;        // ISO date string
 }
 
@@ -76,16 +92,69 @@ export interface Comment {
 }
 
 export type UserRole = 'user' | 'admin';
+export type UserStatus = 'active' | 'warned' | 'banned_temp' | 'banned_perm';
+
+export interface UserContacts {
+  discord?: string;
+  email?: string;
+  social?: string;
+  showEmail?: boolean;
+}
 
 export interface User {
   id: string;
+  /** Firebase Auth uid linked to this profile. */
+  uid?: string;
+  /** Unique tag, lowercase, without "@" (e.g. liza_veter). */
   username: string;
   name: string;
   email: string;
   avatar: string;
   bio?: string;
+  contacts?: UserContacts;
   role: UserRole;
+  status?: UserStatus;
+  warnings?: number;
+  banUntil?: string;
+  banReason?: string;
   createdAt: string;
 }
 
+export interface Playlist {
+  id: string;
+  ownerId: string;
+  name: string;
+  karaokeIds: string[];
+  createdAt: string;
+}
+
+export type InteractionType = 'listen' | 'finish' | 'like' | 'playlist' | 'comment' | 'share';
+
 export type SortOption = 'recommended' | 'popular' | 'newest' | 'oldest';
+
+export type NotificationType = 'like' | 'comment' | 'playlist' | 'follow' | 'download' | 'warning' | 'ban';
+
+export interface AppNotification {
+  id: string;
+  /** Recipient */
+  userId: string;
+  type: NotificationType;
+  actorId?: string;
+  actorName?: string;
+  karaokeId?: string;
+  karaokeTitle?: string;
+  text: string;
+  createdAt: string;
+  read: boolean;
+}
+
+export type StatType = 'listen' | 'follow' | 'download';
+
+/** Daily counter per author, used for the Creator Studio charts. */
+export interface DailyStat {
+  id: string; // `${authorId}_${type}_${day}`
+  authorId: string;
+  type: StatType;
+  day: string; // YYYY-MM-DD
+  count: number;
+}

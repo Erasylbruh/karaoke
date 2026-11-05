@@ -1,91 +1,154 @@
-import { useMemo, useSyncExternalStore } from 'react';
-import { Karaoke, Comment, User } from './types';
-import { INITIAL_KARAOKES, INITIAL_COMMENTS, INITIAL_USERS } from './mock-data';
-import { STORAGE_KEYS, subscribeStorage } from './storage';
-
-export const GUEST_USER_ID = 'guest-user';
-
-const NO_IDS: string[] = [];
-
 /**
- * Builds a getSnapshot for one localStorage key. The parsed value is cached by the raw string,
- * so the same string always yields the same object. It only reads storage, never writes.
+ * Synchronous cache over Firestore.
+ *
+ * Every collection is mirrored in memory through onSnapshot listeners, so lib/storage.ts can keep
+ * its synchronous API: reads come from the cache, writes update the cache immediately and are sent
+ * to Firestore in the background. Fine for testing and small data; for production, move to
+ * per-page queries and server-side counters (see docs/FIREBASE.md).
  */
-function createSnapshot<T>(key: string, parse: (raw: string | null) => T): () => T {
-  let cached = false;
-  let lastRaw: string | null = null;
-  let lastValue: T;
-  return () => {
-    let raw: string | null = null;
-    try {
-      raw = localStorage.getItem(key);
-    } catch {
-      raw = null;
-    }
-    if (!cached || raw !== lastRaw) {
-      cached = true;
-      lastRaw = raw;
-      lastValue = parse(raw);
-    }
-    return lastValue;
-  };
+import { collection, doc, onSnapshot, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import { db } from './firebase';
+
+type Doc = { id: string };
+type Listener = () => void;
+
+const listeners = new Set<Listener>();
+let version = 0;
+
+function emit() {
+  version++;
+  listeners.forEach((l) => l());
 }
 
-function parseJson(raw: string | null): unknown {
-  if (raw === null) return undefined;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
+export function subscribeStore(l: Listener) {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+export const getStoreVersion = () => version;
+
+export const syncErrors: string[] = [];
+function report(where: string, e: unknown) {
+  const msg = `${where}: ${e instanceof Error ? e.message : String(e)}`;
+  console.warn('[firestore]', msg);
+  syncErrors.push(msg);
+  emit();
+}
+
+export class Col<T extends Doc> {
+  map = new Map<string, T>();
+  loaded = false;
+  constructor(public readonly name: string) {}
+
+  all(): T[] {
+    return [...this.map.values()];
+  }
+  get(id: string): T | undefined {
+    return this.map.get(id);
+  }
+  set(item: T) {
+    this.map.set(item.id, item);
+    emit();
+    setDoc(doc(db, this.name, item.id), item).catch((e) => report(`write ${this.name}/${item.id}`, e));
+  }
+  patch(id: string, partial: Partial<T>): T | undefined {
+    const cur = this.map.get(id);
+    if (!cur) return undefined;
+    const next = { ...cur, ...partial };
+    this.set(next);
+    return next;
+  }
+  remove(id: string) {
+    this.map.delete(id);
+    emit();
+    deleteDoc(doc(db, this.name, id)).catch((e) => report(`delete ${this.name}/${id}`, e));
   }
 }
 
-// Same fallbacks as the getters in storage.ts: a missing or empty list means the seed data.
-function listOr<T>(initial: T[]): (raw: string | null) => T[] {
-  return (raw) => {
-    const value = parseJson(raw);
-    return Array.isArray(value) && value.length > 0 ? (value as T[]) : initial;
-  };
+export interface FollowDoc { id: string; followers: string[] }
+export interface LikeDoc { id: string; ids: string[] }
+export interface FlagDoc { id: string; at: string }
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export const cols = {
+  karaokes: new Col<any>('karaokes'),
+  users: new Col<any>('users'),
+  comments: new Col<any>('comments'),
+  playlists: new Col<any>('playlists'),
+  follows: new Col<FollowDoc>('follows'),
+  likes: new Col<LikeDoc>('likes'),
+  interactions: new Col<FlagDoc>('interactions'),
+  notifications: new Col<any>('notifications'),
+  events: new Col<any>('events'),
+};
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+let started: Promise<void> | null = null;
+
+/**
+ * Starts all listeners; resolves once every collection delivered its first server snapshot.
+ * If Firestore is unreachable (database not created, rules deny, offline) it resolves anyway after
+ * a timeout and fills the cache with demo data locally via `fallback`, so the UI stays usable.
+ */
+export function startSync(seed: () => Promise<void>, fallback: () => void): Promise<void> {
+  if (started) return started;
+  started = new Promise<void>((resolve) => {
+    const all = Object.values(cols);
+    let pending = all.length;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (syncErrors.length > 0 && cols.karaokes.map.size === 0) fallback();
+      emit();
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      report('connect', 'Firestore не ответил за 12 секунд');
+      finish();
+    }, 12000);
+    const done = async (c: Col<Doc>) => {
+      if (c.loaded) return;
+      c.loaded = true;
+      if (--pending === 0) {
+        if (cols.karaokes.map.size === 0 && cols.users.map.size === 0 && syncErrors.length === 0) {
+          const timeout = new Promise<void>((_, rej) => setTimeout(() => rej(new Error('запись демо-данных не завершилась за 15 секунд')), 15000));
+          await Promise.race([seed(), timeout]).catch((e) => report('seed', e));
+        }
+        finish();
+      }
+    };
+    all.forEach((c) => {
+      onSnapshot(
+        collection(db, c.name),
+        (snap) => {
+          snap.docChanges().forEach((ch) => {
+            if (ch.type === 'removed') c.map.delete(ch.doc.id);
+            else c.map.set(ch.doc.id, { ...(ch.doc.data() as Doc), id: ch.doc.id });
+          });
+          // A cached (offline) snapshot does not prove the server answered.
+          if (!snap.metadata.fromCache) void done(c as Col<Doc>);
+          emit();
+        },
+        (e) => {
+          report(`listen ${c.name}`, e);
+          void done(c as Col<Doc>);
+        }
+      );
+    });
+  });
+  return started;
 }
 
-const getKaraokesSnapshot = createSnapshot(STORAGE_KEYS.KARAOKES, listOr<Karaoke>(INITIAL_KARAOKES));
-const getUsersSnapshot = createSnapshot(STORAGE_KEYS.USERS, listOr<User>(INITIAL_USERS));
-const getCommentsSnapshot = createSnapshot(STORAGE_KEYS.COMMENTS, listOr<Comment>(INITIAL_COMMENTS));
-
-const getCurrentUserSnapshot = createSnapshot<User | null>(STORAGE_KEYS.CURRENT_USER, (raw) => {
-  if (raw === null) return INITIAL_USERS[0];
-  const value = parseJson(raw);
-  if (value === null) return null;
-  return value && typeof value === 'object' ? (value as User) : INITIAL_USERS[0];
-});
-
-const getLikedSnapshot = createSnapshot<Record<string, string[]>>(STORAGE_KEYS.LIKED_POSTS, (raw) => {
-  const value = parseJson(raw);
-  return value && typeof value === 'object' ? (value as Record<string, string[]>) : {};
-});
-
-const getNullSnapshot = () => null;
-const getUnknownSnapshot = () => undefined;
-
-export function useStoredKaraokes(): Karaoke[] | null {
-  return useSyncExternalStore(subscribeStorage, getKaraokesSnapshot, getNullSnapshot);
-}
-
-export function useStoredUsers(): User[] | null {
-  return useSyncExternalStore(subscribeStorage, getUsersSnapshot, getNullSnapshot);
-}
-
-/** `undefined` — not known yet (server and hydration), `null` — guest. */
-export function useStoredCurrentUser(): User | null | undefined {
-  return useSyncExternalStore<User | null | undefined>(subscribeStorage, getCurrentUserSnapshot, getUnknownSnapshot);
-}
-
-export function useStoredComments(karaokeId: string): Comment[] | null {
-  const all = useSyncExternalStore(subscribeStorage, getCommentsSnapshot, getNullSnapshot);
-  return useMemo(() => (all ? all.filter((c) => c.karaokeId === karaokeId) : null), [all, karaokeId]);
-}
-
-export function useStoredLikedIds(userId: string): string[] | null {
-  const likedMap = useSyncExternalStore(subscribeStorage, getLikedSnapshot, getNullSnapshot);
-  return useMemo(() => (likedMap ? likedMap[userId] ?? NO_IDS : null), [likedMap, userId]);
+/** Writes many docs at once (used for the first-run seed). */
+export async function bulkWrite(items: { col: Col<Doc>; item: Doc }[]) {
+  for (let i = 0; i < items.length; i += 400) {
+    const batch = writeBatch(db);
+    items.slice(i, i + 400).forEach(({ col, item }) => {
+      col.map.set(item.id, item);
+      batch.set(doc(db, col.name, item.id), item);
+    });
+    await batch.commit();
+  }
+  emit();
 }

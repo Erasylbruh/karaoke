@@ -53,7 +53,7 @@ export default function Footer() {
           <div className="space-y-2">
             <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-300 mb-3">Водяной знак</h4>
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Все экспортированные видео содержат отметку <span className="text-zinc-200 font-medium">«✦ KaraokeCraft»</span>.
+              Все экспортированные видео содержат отметку <span className="text-zinc-200 font-medium">«KaraokeCraft»</span>.
             </p>
             <div className="text-[11px] text-zinc-500 pt-2">
               Next.js • Tailwind CSS • Web Audio API

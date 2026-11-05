@@ -1,430 +1,859 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Karaoke, LyricLine } from '@/lib/types';
+import { Karaoke, LyricLine, Visibility } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
-import { saveKaraoke } from '@/lib/storage';
+import { saveKaraoke, updateKaraoke, getKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid } from '@/lib/storage';
+import { putBlob, resolveBlobUrl } from '@/lib/blob-store';
+import {
+  DEFAULT_FONTS,
+  POPULAR_FONTS,
+  FONT_FILE_ACCEPT,
+  FONT_FILE_MAX_BYTES,
+  GOOGLE_FONT_NAME,
+  fontCss,
+  loadGoogleFont,
+  loadCustomFont,
+  looksLikeFont,
+} from '@/lib/fonts';
+import { alignmentProvider } from '@/lib/alignment';
 import VideoDownloaderModal from '@/components/karaoke/VideoDownloaderModal';
+import Tutorial from '@/components/ui/Tutorial';
 
-const FONT_MAP: Record<string, string> = {
-  Onest: '"Onest", system-ui, sans-serif',
-  Unbounded: '"Unbounded", "Onest", sans-serif',
-  Georgia: 'Georgia, "Times New Roman", serif',
-  Mono: 'ui-monospace, Menlo, Consolas, monospace',
-};
+const STEPS = ['Аудио и информация', 'Текст и тайминг', 'Стиль', 'Доступ'] as const;
 
-const DEFAULT_LYRICS: LyricLine[] = [
-  { id: '1', time: 0, text: 'Город гаснет за стеклом' },
-  { id: '2', time: 4, text: 'Фонари плывут рекой' },
-  { id: '3', time: 8, text: 'Я держу твой голос в кармане' },
-  { id: '4', time: 12, text: 'Как проездной на всю зиму' },
-  { id: '5', time: 16, text: 'Ехать, ехать, не домой' },
-  { id: '6', time: 20, text: 'Просто ехать за тобой' },
-  { id: '7', time: 24, text: 'Остановка — это мы' },
-  { id: '8', time: 28, text: 'Свет внутри, а снаружи дым' },
-  { id: '9', time: 32, text: 'Пой со мной, пока не рассвело' },
-  { id: '10', time: 36, text: 'Пусть услышит весь район' },
-];
+// The lyrics block can only be dragged inside the safe area, split into zones 1-3 (top / middle / bottom).
+const ZONE_TOP = 14;
+const ZONE_BOTTOM = 88;
+const ZONES = [1, 2, 3];
 
-const DEFAULT_LRC_TEXT = `[00:00.00] Город гаснет за стеклом
-[00:04.00] Фонари плывут рекой
-[00:08.00] Я держу твой голос в кармане
-[00:12.00] Как проездной на всю зиму
-[00:16.00] Ехать, ехать, не домой
-[00:20.00] Просто ехать за тобой
-[00:24.00] Остановка — это мы
-[00:28.00] Свет внутри, а снаружи дым
-[00:32.00] Пой со мной, пока не рассвело
-[00:36.00] Пусть услышит весь район`;
+const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i;
+const AUDIO_MAX_BYTES = 40 * 1024 * 1024;
 
-const NOTE: Record<string, string> = {
-  lrc: 'Загрузите файл .lrc или отредактируйте текст — строки встанут по времени сами.',
-  man: 'Включите музыку и нажимайте на строку, когда её поют.',
-};
+const SAMPLE_TEXT = `Город гаснет за стеклом
+Фонари плывут рекой
+Я держу твой голос в кармане
+Как проездной на всю зиму`;
 
-export default function KaraokeCreator() {
+interface Line {
+  id: string;
+  text: string;
+  time: number;
+  end: number;
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+const clamp = (n: number, a: number, b: number) => Math.min(b, Math.max(a, n));
+
+function parseLrc(text: string): Line[] {
+  const out: Line[] = [];
+  const re = /\[(\d{1,2}):(\d{2}(?:\.\d{1,3})?)\](.*)/;
+  text.split('\n').forEach((l, idx) => {
+    const m = l.match(re);
+    const t = m?.[3].trim();
+    if (m && t) {
+      const start = parseInt(m[1], 10) * 60 + parseFloat(m[2]);
+      out.push({ id: `l-${idx}-${Date.now()}`, text: t, time: round1(start), end: round1(start + 3.5) });
+    }
+  });
+  // An LRC file only has starts: end each line just before the next one begins.
+  return out.map((l, i) => ({ ...l, end: out[i + 1] ? round1(Math.min(l.end, out[i + 1].time)) : l.end }));
+}
+
+/** Small JPEG so a cover fits comfortably in storage. */
+function fileToCover(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject(new Error('canvas'));
+      const side = Math.min(img.width, img.height);
+      ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => reject(new Error('image'));
+    img.src = url;
+  });
+}
+
+/** `editId` switches the wizard to editing an existing karaoke of the signed-in author. */
+export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, isLoading, openAuthPrompt } = useAuth();
 
-  const [title, setTitle] = useState('Ночной автобус');
-  const [artist, setArtist] = useState('Лиза Ветер');
-  const [description, setDescription] = useState('Атмосферный трек для ночных поездок.');
+  const [step, setStep] = useState(0);
+
+  // Step 1
+  const [audioRef_, setAudioRef] = useState<string | null>(null); // stored blob ref
+  const [audioUrl, setAudioUrl] = useState<string | null>(null); // object URL for playback
+  const [audioName, setAudioName] = useState('');
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [demoAudio, setDemoAudio] = useState(false);
+  const [title, setTitle] = useState('');
+  const [artist, setArtist] = useState('');
+  const [description, setDescription] = useState('');
+  const [tags, setTags] = useState('');
+  const [coverImage, setCoverImage] = useState<string | undefined>();
+
+  // Step 2
+  const [rawText, setRawText] = useState('');
+  const [lines, setLines] = useState<Line[]>([]);
+  const [audioTime, setAudioTime] = useState<number | null>(null);
+
+  // Step 3
   const [font, setFont] = useState('Onest');
+  const [fontFile, setFontFile] = useState<string | undefined>();
+  const [googleName, setGoogleName] = useState('');
   const [activeColor, setActiveColor] = useState('#ffb547');
   const [textColor, setTextColor] = useState('#f4f4f5');
   const [backgroundColor, setBackgroundColor] = useState('#1d1b3a');
   const [fontSize, setFontSize] = useState(32);
   const [aspectRatio, setAspectRatio] = useState<'v' | 'h'>('v');
-  const [syncMode, setSyncMode] = useState<'lrc' | 'man'>('lrc');
-  const [tags, setTags] = useState('поп, ночь');
-  const [lrcText, setLrcText] = useState(DEFAULT_LRC_TEXT);
-  const [lyrics, setLyrics] = useState<LyricLine[]>(DEFAULT_LYRICS);
+  const [textY, setTextY] = useState(50);
 
-  const [previewLineIndex, setPreviewLineIndex] = useState(2);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  // Step 4
+  const [visibility, setVisibility] = useState<Visibility>('public');
+
+  const [previewLineIndex, setPreviewLineIndex] = useState(0);
+  const [toast, setToast] = useState<string | null>(null);
   const [isDownloadOpen, setIsDownloadOpen] = useState(false);
-  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const audioEl = useRef<HTMLAudioElement | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const blockRef = useRef<HTMLDivElement | null>(null);
+  const dragGrab = useRef<number | null>(null);
+  const toastTimer = useRef<NodeJS.Timeout | null>(null);
 
   const showToast = (msg: string) => {
-    setToastMessage(msg);
-    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
-    toastTimeoutRef.current = setTimeout(() => setToastMessage(null), 2600);
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2800);
   };
 
-  // Parse LRC whenever text changes
-  const handleLrcChange = (text: string) => {
-    setLrcText(text);
-    const lines = text.split('\n');
-    const parsed: LyricLine[] = [];
-    const regex = /\[(\d{2}):(\d{2}(?:\.\d{1,3})?)\](.*)/;
+  const [editState, setEditState] = useState<'none' | 'loaded' | 'denied'>('none');
+  useEffect(() => {
+    if (!editId || isLoading) return;
+    const k = getKaraokeById(editId);
+    if (!k || !user || (k.authorId !== user.id && user.role !== 'admin')) {
+      setEditState('denied');
+      return;
+    }
+    setTitle(k.title);
+    setArtist(k.artist);
+    setDescription(k.description || '');
+    setTags(k.tags.join(', '));
+    setCoverImage(k.style.coverImage);
+    if (k.audioUrl) {
+      setAudioRef(k.audioUrl);
+      setAudioName('загруженный трек');
+      void resolveBlobUrl(k.audioUrl).then(setAudioUrl);
+    } else setDemoAudio(true);
+    setAudioDuration(k.duration || 0);
+    const loaded = k.lyrics.map((l, i) => ({
+      id: l.id || `l-${i}`,
+      text: l.text,
+      time: l.time,
+      end: l.end ?? k.lyrics[i + 1]?.time ?? l.time + 4,
+    }));
+    setLines(loaded);
+    setRawText(loaded.map((l) => l.text).join('\n'));
+    setFont(k.style.font || 'Onest');
+    setFontFile(k.style.fontFile);
+    if (k.style.fontFile) void loadCustomFont(k.style.font, k.style.fontFile).catch(() => {});
+    else loadGoogleFont(k.style.font || 'Onest');
+    setActiveColor(k.style.activeColor);
+    setTextColor(k.style.textColor);
+    setBackgroundColor(k.style.backgroundColor);
+    setFontSize(k.style.fontSizePx || 32);
+    setAspectRatio(k.style.aspectRatio === '16:9' || k.style.aspectRatio === 'h' ? 'h' : 'v');
+    setTextY(k.style.textY ?? 50);
+    setVisibility(k.visibility);
+    setEditState('loaded');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId, isLoading, user?.id]);
 
-    lines.forEach((l, idx) => {
-      const match = l.match(regex);
-      if (match) {
-        const m = parseInt(match[1], 10);
-        const s = parseFloat(match[2]);
-        const t = match[3].trim();
-        if (t) {
-          parsed.push({
-            id: `l-${idx}`,
-            time: m * 60 + s,
-            text: t,
-          });
-        }
-      }
-    });
+  const knownArtists = useMemo(
+    () => (typeof window === 'undefined' ? [] : [...new Set(getKaraokes().map((k) => k.artist))]),
+    []
+  );
 
-    if (parsed.length > 0) {
-      setLyrics(parsed);
+  useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
+
+  // Preview cycles through lines by itself until the author plays the audio.
+  useEffect(() => {
+    if (lines.length === 0) return;
+    const timer = setInterval(() => setPreviewLineIndex((p) => (p + 1) % lines.length), 2200);
+    return () => clearInterval(timer);
+  }, [lines.length]);
+
+  // ---------- Step 1: audio ----------
+  const handleAudio = async (file?: File) => {
+    if (!file) return;
+    if (!(file.type.startsWith('audio/') || AUDIO_EXT.test(file.name))) {
+      showToast('Нужен аудиофайл: mp3, wav, ogg, m4a, aac или flac');
+      return;
+    }
+    if (file.size > AUDIO_MAX_BYTES) {
+      showToast('Файл слишком большой — максимум 40 МБ');
+      return;
+    }
+    setBusy(true);
+    try {
+      const ref = await putBlob(file);
+      setAudioRef(ref);
+      setAudioUrl(URL.createObjectURL(file));
+      setAudioName(file.name);
+      setDemoAudio(false);
+      if (!title) setTitle(file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '));
+    } catch {
+      showToast('Не удалось сохранить файл. Проверьте свободное место в браузере');
+    } finally {
+      setBusy(false);
     }
   };
 
-  // Preview animation cycling through lines
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setPreviewLineIndex((prev) => (prev + 1) % lyrics.length);
-    }, 2200);
-    return () => clearInterval(timer);
-  }, [lyrics.length]);
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleCover = async (file?: File) => {
     if (!file) return;
+    if (!file.type.startsWith('image/')) return showToast('Для обложки нужно изображение');
+    try {
+      setCoverImage(await fileToCover(file));
+    } catch {
+      showToast('Не удалось прочитать изображение');
+    }
+  };
 
+  const hasAudio = !!audioRef_ || demoAudio;
+  const step1Ok = hasAudio && title.trim().length > 0;
+
+  // ---------- Step 2: text & timing ----------
+  const onTextChange = (v: string) => {
+    setRawText(v);
+    const texts = v.split('\n').map((s) => s.trim()).filter(Boolean);
+    setLines((prev) => {
+      let cursor = prev.length ? prev[prev.length - 1].end + 0.5 : 0;
+      return texts.map((t, i) => {
+        if (prev[i]) return { ...prev[i], text: t };
+        const line = { id: `l-${Date.now()}-${i}`, text: t, time: round1(cursor), end: round1(cursor + 3.5) };
+        cursor += 4;
+        return line;
+      });
+    });
+  };
+
+  const patchLine = (i: number, patch: Partial<Line>) =>
+    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+
+  const removeLine = (i: number) => {
+    const next = lines.filter((_, idx) => idx !== i);
+    setLines(next);
+    setRawText(next.map((l) => l.text).join('\n'));
+  };
+
+  const markNow = (i: number, field: 'time' | 'end') => {
+    const t = audioEl.current?.currentTime;
+    if (t === undefined) return showToast('Загрузите аудио, чтобы отмечать моменты');
+    patchLine(i, { [field]: round1(t) } as Partial<Line>);
+  };
+
+  const handleLrcFile = (file?: File) => {
+    if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (content) {
-        handleLrcChange(content);
-        showToast('Файл .lrc успешно загружен');
-      }
+    reader.onload = () => {
+      const parsed = parseLrc(String(reader.result || ''));
+      if (parsed.length === 0) return showToast('В файле не найдено строк с таймингами [мм:сс.xx]');
+      setLines(parsed);
+      setRawText(parsed.map((l) => l.text).join('\n'));
+      showToast(`Загружено строк: ${parsed.length}`);
     };
     reader.readAsText(file);
   };
 
-  const handlePublish = () => {
-    if (!title.trim()) {
-      showToast('Пожалуйста, укажите название песни');
+  const timingProblems = lines.filter((l) => l.end <= l.time).length;
+
+  // ---------- Step 3: fonts ----------
+  const pickFont = (name: string) => {
+    setFont(name);
+    setFontFile(undefined);
+    loadGoogleFont(name);
+  };
+
+  const handleFontFile = async (file?: File) => {
+    if (!file) return;
+    if (!(await looksLikeFont(file))) {
+      showToast(`Принимаются только файлы шрифтов (${FONT_FILE_ACCEPT}) до ${FONT_FILE_MAX_BYTES / 1024 / 1024} МБ`);
       return;
     }
+    try {
+      const ref = await putBlob(file);
+      const family = `custom-${uid()}`;
+      await loadCustomFont(family, ref);
+      setFont(family);
+      setFontFile(ref);
+      showToast('Шрифт загружен');
+    } catch {
+      showToast('Не удалось прочитать шрифт — файл повреждён');
+    }
+  };
 
-    const tagList = tags
-      .split(',')
-      .map((t) => t.trim().toLowerCase())
-      .filter(Boolean);
+  const applyGoogleFont = async () => {
+    const name = googleName.trim();
+    if (!GOOGLE_FONT_NAME.test(name)) return showToast('Введите название шрифта латиницей, например «Caveat»');
+    loadGoogleFont(name);
+    const timeout = new Promise<never[]>((r) => setTimeout(() => r([]), 4000));
+    const faces = await Promise.race([document.fonts.load(`16px "${name}"`), timeout]);
+    if (faces.length === 0) return showToast(`Шрифт «${name}» не найден в Google Fonts`);
+    setFont(name);
+    setFontFile(undefined);
+    showToast(`Шрифт «${name}» подключён`);
+  };
 
-    const newId = title
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9а-яё]/gi, '-')
-      .replace(/-+/g, '-') + '-' + Date.now().toString().slice(-4);
+  // ---------- Step 3: lyrics block drag ----------
+  const blockHeightPct = () => {
+    const f = frameRef.current;
+    const b = blockRef.current;
+    return f && b ? (b.offsetHeight / f.offsetHeight) * 100 : 30;
+  };
+
+  const clampCenter = (c: number) => {
+    const half = blockHeightPct() / 2;
+    const lo = ZONE_TOP + half;
+    const hi = ZONE_BOTTOM - half;
+    return lo > hi ? (ZONE_TOP + ZONE_BOTTOM) / 2 : clamp(c, lo, hi);
+  };
+
+  // Re-clamp whenever the block's size changes (font size / format).
+  useEffect(() => {
+    setTextY((y) => clampCenter(y));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fontSize, aspectRatio, lines.length]);
+
+  const onDragStart = (e: React.PointerEvent) => {
+    const f = frameRef.current;
+    const b = blockRef.current;
+    if (!f || !b) return;
+    const rect = f.getBoundingClientRect();
+    const center = rect.top + (textY / 100) * rect.height;
+    dragGrab.current = e.clientY - center;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onDragMove = (e: React.PointerEvent) => {
+    if (dragGrab.current === null || !frameRef.current) return;
+    const rect = frameRef.current.getBoundingClientRect();
+    setTextY(clampCenter(((e.clientY - dragGrab.current - rect.top) / rect.height) * 100));
+  };
+  const onDragEnd = () => {
+    dragGrab.current = null;
+  };
+  const onBlockKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowUp') setTextY((y) => clampCenter(y - 2));
+    else if (e.key === 'ArrowDown') setTextY((y) => clampCenter(y + 2));
+    else return;
+    e.preventDefault();
+  };
+
+  // ---------- Publish ----------
+  const finalLines: LyricLine[] = useMemo(
+    () =>
+      lines.map((l, i) => ({
+        id: l.id,
+        time: l.time,
+        end: l.end > l.time ? l.end : lines[i + 1]?.time ?? l.time + 4,
+        text: l.text,
+      })),
+    [lines]
+  );
+
+  const styleObj = {
+    font,
+    fontFile,
+    textColor,
+    activeColor,
+    backgroundColor,
+    fontSize: 'md' as const,
+    fontSizePx: fontSize,
+    textY: Math.round(textY),
+    aspectRatio: (aspectRatio === 'v' ? '9:16' : '16:9') as '9:16' | '16:9',
+    coverImage,
+  };
+
+  const tagList = tags
+    .split(/[,\s]+/)
+    .map((t) => t.trim().toLowerCase().replace(/^#/, ''))
+    .filter(Boolean)
+    .slice(0, 6);
+
+  const handlePublish = () => {
+    if (!user) return openAuthPrompt('Чтобы опубликовать караоке, войдите или зарегистрируйтесь.');
+    if (!step1Ok) return setStep(0);
+    if (finalLines.length === 0) {
+      showToast('Добавьте текст песни');
+      return setStep(1);
+    }
+
+    // Reuse the spelling of an artist that already exists, so "queen" and "Queen" share one page.
+    const existingArtist = knownArtists.find((a) => artistSlug(a) === artistSlug(artist));
+
+    if (editId) {
+      updateKaraoke(editId, {
+        title: title.trim(),
+        artist: existingArtist ?? (artist.trim() || 'Неизвестный исполнитель'),
+        description: description.trim(),
+        tags: tagList.length ? tagList : ['караоке'],
+        duration: Math.ceil(audioDuration || (finalLines[finalLines.length - 1].end ?? 0) + 4) || 40,
+        audioUrl: audioRef_ ?? undefined,
+        style: styleObj,
+        visibility,
+        lyrics: finalLines,
+      });
+      showToast('Изменения сохранены');
+      setTimeout(() => router.push('/studio/content'), 700);
+      return;
+    }
+    const newId =
+      (title.toLowerCase().trim().replace(/[^a-z0-9а-яё]+/gi, '-').replace(/^-+|-+$/g, '') || 'karaoke') +
+      '-' + uid();
 
     const newKaraoke: Karaoke = {
       id: newId,
       title: title.trim(),
-      artist: artist.trim() || 'Неизвестный исполнитель',
+      artist: existingArtist ?? (artist.trim() || 'Неизвестный исполнитель'),
       description: description.trim(),
-      tags: tagList.length > 0 ? tagList : ['караоке'],
-      duration: Math.max(40, lyrics[lyrics.length - 1]?.time + 4 || 40),
+      tags: tagList.length ? tagList : ['караоке'],
+      duration: Math.ceil(audioDuration || (finalLines[finalLines.length - 1].end ?? 0) + 4) || 40,
+      audioUrl: audioRef_ ?? undefined,
       audioPreset: 'pop',
-      style: {
-        font,
-        textColor,
-        activeColor,
-        backgroundColor,
-        fontSize: 'md',
-        fontSizePx: fontSize,
-        aspectRatio: aspectRatio === 'v' ? '9:16' : '16:9',
-      },
-      authorId: user?.id || 'guest-user',
-      authorName: user?.name || 'Гость',
-      likesCount: 1,
-      viewsCount: 1,
-      recommendationScore: 8,
+      style: styleObj,
+      authorId: user.id,
+      authorName: user.name,
+      authorAvatar: user.avatar,
+      likesCount: 0,
+      viewsCount: 0,
+      recommendationScore: initialRecommendationScore(user.id),
+      visibility,
+      status: 'active',
       createdAt: new Date().toISOString(),
-      lyrics,
+      lyrics: finalLines,
     };
 
     saveKaraoke(newKaraoke);
-    showToast('Опубликовано — трек успешно сохранён!');
-
-    setTimeout(() => {
-      router.push(`/karaoke/${newKaraoke.id}`);
-    }, 900);
+    showToast(
+      visibility === 'public' ? 'Опубликовано!' : visibility === 'unlisted' ? 'Сохранено: доступно по ссылке' : 'Сохранено: видите только вы'
+    );
+    setTimeout(() => router.push(`/karaoke/${newKaraoke.id}`), 900);
   };
 
-  // Prepare preview lines slice
-  const windowRange = aspectRatio === 'v' ? [-2, 3] : [-1, 2];
-  const previewLines: { text: string; isActive: boolean; key: number }[] = [];
-  for (let j = windowRange[0]; j <= windowRange[1]; j++) {
-    const idx = (previewLineIndex + j + lyrics.length) % lyrics.length;
-    previewLines.push({
-      text: lyrics[idx]?.text || '',
-      isActive: j === 0,
-      key: idx,
-    });
+  // ---------- Preview ----------
+  const activeIdx = (() => {
+    if (lines.length === 0) return -1;
+    if (audioTime !== null) {
+      let a = 0;
+      lines.forEach((l, i) => l.time <= audioTime && (a = i));
+      return a;
+    }
+    return previewLineIndex % lines.length;
+  })();
+  const range = aspectRatio === 'v' ? [-2, 3] : [-1, 2];
+  const previewLines: { text: string; on: boolean; key: string }[] = [];
+  if (lines.length > 0) {
+    for (let j = range[0]; j <= range[1]; j++) {
+      const idx = activeIdx + j;
+      if (idx >= 0 && idx < lines.length) previewLines.push({ text: lines[idx].text, on: j === 0, key: lines[idx].id });
+    }
   }
 
-  const currentPreviewKaraoke: Karaoke = {
+  const previewKaraoke: Karaoke = {
     id: 'preview',
     title: title || 'Без названия',
     artist: artist || 'Артист',
-    description: description,
-    tags: tags.split(',').map((t) => t.trim()),
-    duration: 40,
-    style: {
-      font,
-      textColor,
-      activeColor,
-      backgroundColor,
-      fontSize: 'md',
-      fontSizePx: fontSize,
-      aspectRatio: aspectRatio === 'v' ? '9:16' : '16:9',
-    },
+    description,
+    tags: tagList,
+    duration: Math.ceil(audioDuration) || 40,
+    style: styleObj,
     authorId: user?.id || 'guest',
     authorName: user?.name || 'Гость',
     likesCount: 0,
     viewsCount: 0,
+    recommendationScore: 0,
+    visibility: 'private',
+    status: 'active',
     createdAt: new Date().toISOString(),
-    lyrics,
+    lyrics: finalLines,
   };
+
+  if (isLoading) return <div style={{ minHeight: '60vh' }} />;
+  if (!user) {
+    return (
+      <div className="pg" style={{ maxWidth: 520 }}>
+        <h1 className="pg-h">Создать караоке</h1>
+        <p className="pg-sub">Войдите или зарегистрируйтесь, чтобы создавать и публиковать караоке.</p>
+        <div className="row">
+          <Link href="/login" className="bt pr">Войти</Link>
+          <Link href="/register" className="bt">Регистрация</Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (editId && editState === 'denied') {
+    return (
+      <div className="pg" style={{ maxWidth: 520 }}>
+        <h1 className="pg-h">Караоке недоступно</h1>
+        <p className="pg-sub">Его нет, или оно принадлежит другому автору.</p>
+        <Link href="/studio/content" className="bt pr">В Creator Studio</Link>
+      </div>
+    );
+  }
+  if (editId && editState !== 'loaded') return <div style={{ minHeight: '60vh' }} />;
+
+  const showPreview = step >= 1;
 
   return (
     <>
-      <section id="studio">
-        <div className="ctl" id="ctl">
-          <h2>Оформление</h2>
+      <Tutorial
+        page="create"
+        steps={[
+          { title: 'Четыре шага', text: 'Аудио и информация → текст и тайминг → стиль → доступ. Переключаться между шагами можно в любой момент.' },
+          { title: 'Тайминги', text: 'Для каждой строки укажите начало и конец. Пауза между строками не растягивает заливку.' },
+          { title: 'Стиль и предпросмотр', text: 'Блок с текстом в предпросмотре можно перетаскивать вверх и вниз — в пределах зон 1–3.' },
+        ]}
+      />
 
-          <label>
-            Название
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Название песни"
-            />
-          </label>
+      <div className="pg" style={{ maxWidth: 1280 }}>
+        {editId && (
+          <Link href="/studio/content" className="bt sm gh" style={{ marginBottom: 14 }}>
+            ← Назад в Creator Studio
+          </Link>
+        )}
+        <h1 className="pg-h">{editId ? `Редактирование: ${title || 'караоке'}` : 'Создать караоке'}</h1>
+        <p className="pg-sub">Шаг {step + 1} из {STEPS.length}: {STEPS[step]}</p>
 
-          <label>
-            Артист
-            <input
-              type="text"
-              value={artist}
-              onChange={(e) => setArtist(e.target.value)}
-              placeholder="Имя исполнителя"
-            />
-          </label>
+        <div className="stepper" role="tablist">
+          {STEPS.map((s, i) => (
+            <button
+              key={s}
+              role="tab"
+              aria-current={i === step ? 'step' : undefined}
+              className={i < step ? 'done' : ''}
+              onClick={() => (i <= step || step1Ok ? setStep(i) : showToast('Сначала загрузите аудио и укажите название'))}
+            >
+              {i + 1}. {s}
+            </button>
+          ))}
+        </div>
 
-          <label>
-            Шрифт
-            <select value={font} onChange={(e) => setFont(e.target.value)}>
-              <option value="Onest">Onest</option>
-              <option value="Unbounded">Unbounded</option>
-              <option value="Georgia">Georgia</option>
-              <option value="Mono">Моноширинный</option>
-            </select>
-          </label>
+        <div style={{ display: 'grid', gridTemplateColumns: showPreview ? 'minmax(300px, 460px) 1fr' : 'minmax(300px, 640px)', gap: 36, alignItems: 'start' }} className="ed">
+          <div className="stack">
+            {/* ---------------- STEP 1 ---------------- */}
+            {step === 0 && (
+              <>
+                <div className="card stack">
+                  <b>1. Загрузите аудио</b>
+                  <label className="bt" style={{ cursor: 'pointer', padding: '28px 16px', borderStyle: 'dashed', flexDirection: 'column' }}>
+                    {busy ? 'Загрузка…' : audioName ? `Выбрано: ${audioName}` : 'Выберите файл (mp3, wav, ogg, m4a)'}
+                    <span className="mu sm">до 40 МБ</span>
+                    <input type="file" hidden accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" onChange={(e) => handleAudio(e.target.files?.[0])} />
+                  </label>
+                  {!hasAudio && (
+                    <button className="lk mu sm" style={{ textAlign: 'left' }} onClick={() => setDemoAudio(true)}>
+                      Нет файла под рукой? Использовать демо-мелодию
+                    </button>
+                  )}
+                  {demoAudio && <span className="pill ok" style={{ width: 'fit-content' }}>Демо-мелодия выбрана</span>}
+                  {audioUrl && (
+                    <audio
+                      ref={audioEl}
+                      src={audioUrl}
+                      controls
+                      style={{ width: '100%' }}
+                      onLoadedMetadata={(e) => setAudioDuration(e.currentTarget.duration || 0)}
+                      onTimeUpdate={(e) => setAudioTime(e.currentTarget.currentTime)}
+                    />
+                  )}
+                </div>
 
-          <div className="cl">
-            <label>
-              Активная строка
-              <input
-                type="color"
-                value={activeColor}
-                onChange={(e) => setActiveColor(e.target.value)}
-              />
-            </label>
-            <label>
-              Текст
-              <input
-                type="color"
-                value={textColor}
-                onChange={(e) => setTextColor(e.target.value)}
-              />
-            </label>
-            <label>
-              Фон
-              <input
-                type="color"
-                value={backgroundColor}
-                onChange={(e) => setBackgroundColor(e.target.value)}
-              />
-            </label>
-          </div>
+                {hasAudio && (
+                  <div className="card stack">
+                    <b>2. Расскажите о песне</b>
+                    <label className="fld">
+                      Название песни *
+                      <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ночной автобус" />
+                    </label>
+                    <label className="fld">
+                      Исполнитель
+                      <input type="text" list="artists" value={artist} onChange={(e) => setArtist(e.target.value)} placeholder="Лиза Ветер" />
+                      <datalist id="artists">{knownArtists.map((a) => <option key={a} value={a} />)}</datalist>
+                      <span className="sm">Выберите из списка, если исполнитель уже есть на сайте.</span>
+                    </label>
+                    <label className="fld">
+                      Описание (по желанию)
+                      <textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+                    </label>
+                    <label className="fld">
+                      Теги
+                      <input type="text" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="поп, ночь, инди" />
+                      {tagList.length > 0 && <span className="sm">Будет сохранено: {tagList.map((t) => `#${t}`).join(' ')}</span>}
+                    </label>
+                    <div className="fld">
+                      Обложка (по желанию)
+                      <div className="row">
+                        {coverImage && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={coverImage} alt="" className="av md" style={{ borderRadius: 10 }} />
+                        )}
+                        <label className="bt sm" style={{ cursor: 'pointer' }}>
+                          {coverImage ? 'Заменить' : 'Загрузить обложку'}
+                          <input type="file" hidden accept="image/*" onChange={(e) => handleCover(e.target.files?.[0])} />
+                        </label>
+                        {coverImage && <button className="bt sm gh" onClick={() => setCoverImage(undefined)}>Убрать</button>}
+                      </div>
+                      <span className="sm">Без обложки в каталоге при наведении будет играть текст песни.</span>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
 
-          <label>
-            Размер текста ({fontSize}px)
-            <input
-              type="range"
-              min="20"
-              max="56"
-              value={fontSize}
-              onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
-            />
-          </label>
+            {/* ---------------- STEP 2 ---------------- */}
+            {step === 1 && (
+              <>
+                {audioUrl && (
+                  <audio
+                    ref={audioEl}
+                    src={audioUrl}
+                    controls
+                    style={{ width: '100%' }}
+                    onLoadedMetadata={(e) => setAudioDuration(e.currentTarget.duration || 0)}
+                    onTimeUpdate={(e) => setAudioTime(e.currentTarget.currentTime)}
+                  />
+                )}
+                {demoAudio && <p className="mu sm" style={{ margin: 0 }}>С демо-мелодией кнопки «⏱» недоступны: впишите тайминги вручную.</p>}
 
-          <div className="fs">
-            <span>Формат ролика</span>
-            <div className="sg">
-              <button
-                type="button"
-                aria-pressed={aspectRatio === 'v'}
-                onClick={() => setAspectRatio('v')}
-              >
-                9:16
-              </button>
-              <button
-                type="button"
-                aria-pressed={aspectRatio === 'h'}
-                onClick={() => setAspectRatio('h')}
-              >
-                16:9
-              </button>
+                <div className="card stack">
+                  <label className="fld">
+                    Текст песни (одна строка — одна строка караоке)
+                    <textarea rows={6} value={rawText} onChange={(e) => onTextChange(e.target.value)} placeholder="Вставьте текст песни…" />
+                  </label>
+                  <div className="row">
+                    <label className="bt sm" style={{ cursor: 'pointer' }}>
+                      Загрузить .lrc
+                      <input type="file" hidden accept=".lrc,.txt" onChange={(e) => handleLrcFile(e.target.files?.[0])} />
+                    </label>
+                    <button className="bt sm gh" onClick={() => onTextChange(SAMPLE_TEXT)}>Вставить пример</button>
+                    <button
+                      className="bt sm"
+                      disabled={!alignmentProvider}
+                      title="Автоматическая разметка появится после запуска сайта на хостинге"
+                    >
+                      Авто-тайминг (скоро)
+                    </button>
+                  </div>
+                </div>
+
+                {lines.length > 0 && (
+                  <div className="card">
+                    <div className="trow" style={{ borderBottom: 0, color: 'var(--mu)', fontSize: 12 }}>
+                      <span />
+                      <span>Строка</span>
+                      <span>Начало, с</span>
+                      <span>Конец, с</span>
+                      <span />
+                    </div>
+                    {lines.map((l, i) => (
+                      <div key={l.id} className={`trow ${i === activeIdx && audioTime !== null ? 'cur' : ''}`}>
+                        <span className="num">{i + 1}</span>
+                        <input className="in" type="text" value={l.text} onChange={(e) => patchLine(i, { text: e.target.value })} aria-label={`Текст строки ${i + 1}`} />
+                        <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                          <input className="in" type="number" step="0.1" min="0" value={l.time} onChange={(e) => patchLine(i, { time: round1(parseFloat(e.target.value) || 0) })} aria-label={`Начало строки ${i + 1}`} />
+                          <button className="bt sm gh" style={{ padding: '4px 6px' }} title="Поставить текущий момент аудио" onClick={() => markNow(i, 'time')} disabled={!audioUrl}>⏱</button>
+                        </div>
+                        <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                          <input className="in" type="number" step="0.1" min="0" value={l.end} onChange={(e) => patchLine(i, { end: round1(parseFloat(e.target.value) || 0) })} aria-label={`Конец строки ${i + 1}`} style={l.end <= l.time ? { borderColor: '#f87171' } : undefined} />
+                          <button className="bt sm gh" style={{ padding: '4px 6px' }} title="Поставить текущий момент аудио" onClick={() => markNow(i, 'end')} disabled={!audioUrl}>⏱</button>
+                        </div>
+                        <button className="bt sm gh del" onClick={() => removeLine(i)} aria-label={`Удалить строку ${i + 1}`}>✕</button>
+                      </div>
+                    ))}
+                    {timingProblems > 0 && (
+                      <p className="sm" style={{ color: '#f87171', marginBottom: 0 }}>
+                        У {timingProblems} строк конец раньше начала — заливка для них растянется до следующей строки.
+                      </p>
+                    )}
+                    <p className="mu sm" style={{ marginBottom: 0 }}>
+                      Заливка строки идёт от начала до конца. Всё, что между концом строки и началом следующей — пауза.
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ---------------- STEP 3 ---------------- */}
+            {step === 2 && (
+              <>
+                <div className="card stack">
+                  <b>Шрифт</b>
+                  <span className="mu sm">Стандартные</span>
+                  <div className="fontgrid">
+                    {DEFAULT_FONTS.map((f) => (
+                      <button key={f} className="fontbtn" style={{ fontFamily: fontCss(f) }} aria-pressed={font === f && !fontFile} onClick={() => pickFont(f)}>
+                        {f === 'Mono' ? 'Моно' : f}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="mu sm">Популярные у авторов</span>
+                  <div className="fontgrid">
+                    {POPULAR_FONTS.map((f) => (
+                      <button key={f} className="fontbtn" style={{ fontFamily: fontCss(f) }} aria-pressed={font === f && !fontFile} onClick={() => pickFont(f)}>
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="mu sm">Свой шрифт</span>
+                  <div className="row">
+                    <label className="bt sm" style={{ cursor: 'pointer' }}>
+                      Загрузить файл шрифта
+                      <input type="file" hidden accept={FONT_FILE_ACCEPT} onChange={(e) => { handleFontFile(e.target.files?.[0]); e.target.value = ''; }} />
+                    </label>
+                    {fontFile && <span className="pill ok">Свой шрифт подключён</span>}
+                  </div>
+                  <div className="row" style={{ flexWrap: 'nowrap' }}>
+                    <input className="in" type="text" value={googleName} onChange={(e) => setGoogleName(e.target.value)} placeholder="Или название из Google Fonts: Caveat" />
+                    <button className="bt sm" onClick={applyGoogleFont}>Применить</button>
+                  </div>
+                  <span className="mu sm">Файлы: .ttf, .otf, .woff, .woff2 до 2 МБ. Убедитесь, что у вас есть права на шрифт.</span>
+                </div>
+
+                <div className="card stack">
+                  <div className="cl">
+                    <label className="fld">Активная строка<input type="color" value={activeColor} onChange={(e) => setActiveColor(e.target.value)} className="in" style={{ height: 40, padding: 3 }} /></label>
+                    <label className="fld">Текст<input type="color" value={textColor} onChange={(e) => setTextColor(e.target.value)} className="in" style={{ height: 40, padding: 3 }} /></label>
+                    <label className="fld">Фон<input type="color" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} className="in" style={{ height: 40, padding: 3 }} /></label>
+                  </div>
+                  <label className="fld">
+                    Размер текста ({fontSize}px)
+                    <input type="range" min="20" max="56" value={fontSize} onChange={(e) => setFontSize(parseInt(e.target.value, 10))} style={{ accentColor: 'var(--ac)' }} />
+                  </label>
+                  <div className="fs">
+                    <span>Формат ролика</span>
+                    <div className="sg">
+                      <button type="button" aria-pressed={aspectRatio === 'v'} onClick={() => setAspectRatio('v')}>9:16</button>
+                      <button type="button" aria-pressed={aspectRatio === 'h'} onClick={() => setAspectRatio('h')}>16:9</button>
+                    </div>
+                  </div>
+                  <span className="mu sm">Перетащите блок текста в предпросмотре (или стрелками ↑ ↓). Он двигается в пределах зон 1–3.</span>
+                </div>
+              </>
+            )}
+
+            {/* ---------------- STEP 4 ---------------- */}
+            {step === 3 && (
+              <div className="stack">
+                <div className="card stack">
+                  <b>Кто сможет слушать</b>
+                  {(
+                    [
+                      ['public', 'Опубликовать', 'Караоке появится в каталоге, на странице исполнителя и в вашем профиле.'],
+                      ['unlisted', 'Только по ссылке', 'В каталоге его не видно. Слушать смогут все, у кого есть ссылка.'],
+                      ['private', 'Ограничить доступ', 'Видите только вы. Позже можно открыть в Creator Studio.'],
+                    ] as [Visibility, string, string][]
+                  ).map(([v, label, text]) => (
+                    <div key={v} className="choice" role="radio" aria-checked={visibility === v} tabIndex={0} onClick={() => setVisibility(v)} onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && setVisibility(v)}>
+                      <input type="radio" checked={visibility === v} onChange={() => setVisibility(v)} style={{ accentColor: 'var(--ac)', marginTop: 4 }} />
+                      <div><b>{label}</b><span>{text}</span></div>
+                    </div>
+                  ))}
+                </div>
+                <div className="row">
+                  <button className="bt pr" onClick={handlePublish}>
+                    {editId ? 'Сохранить изменения' : visibility === 'public' ? 'Опубликовать' : 'Сохранить'}
+                  </button>
+                  <button className="bt" onClick={() => setIsDownloadOpen(true)} disabled={finalLines.length === 0}>Скачать видео</button>
+                </div>
+              </div>
+            )}
+
+            {/* nav */}
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <button className="bt gh" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}>Назад</button>
+              {step < STEPS.length - 1 && (
+                <button
+                  className="bt pr"
+                  onClick={() => (step === 0 && !step1Ok ? showToast('Загрузите аудио и укажите название') : setStep(step + 1))}
+                >
+                  Далее
+                </button>
+              )}
             </div>
           </div>
 
-          <div className="fs">
-            <span>Тайминги строк</span>
-            <div className="sg">
-              <button
-                type="button"
-                aria-pressed={syncMode === 'lrc'}
-                onClick={() => setSyncMode('lrc')}
+          {/* ---------------- PREVIEW ---------------- */}
+          {showPreview && (
+            <div className="pv">
+              <div
+                ref={frameRef}
+                className={`fr ${aspectRatio}`}
+                id="fr"
+                style={
+                  {
+                    '--sb': backgroundColor,
+                    '--sa': activeColor,
+                    '--st': textColor,
+                    '--sf': fontCss(font),
+                    '--sz': fontSize,
+                  } as React.CSSProperties
+                }
               >
-                Файл LRC
-              </button>
-              <button
-                type="button"
-                aria-pressed={syncMode === 'man'}
-                onClick={() => setSyncMode('man')}
-              >
-                На слух / текст
-              </button>
-            </div>
-            <small>{NOTE[syncMode]}</small>
-          </div>
+                <div className="ft" id="ft">{title || 'Без названия'}</div>
 
-          {syncMode === 'lrc' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <input
-                type="file"
-                accept=".lrc,.txt"
-                id="lrc-file"
-                style={{ display: 'none' }}
-                onChange={handleFileUpload}
-              />
-              <label
-                htmlFor="lrc-file"
-                className="bt"
-                style={{ cursor: 'pointer', textAlign: 'center' }}
-              >
-                Загрузить .lrc файл
-              </label>
+                {step === 2 &&
+                  ZONES.map((z, i) => (
+                    <div key={z} className="zn" style={{ top: `${ZONE_TOP + ((ZONE_BOTTOM - ZONE_TOP) / 3) * i}%` }}>
+                      <span>Зона {z}</span>
+                    </div>
+                  ))}
+
+                <div
+                  ref={blockRef}
+                  className={`fl ${step === 2 ? 'drag' : ''}`}
+                  id="fl"
+                  style={{ inset: 'auto 0 auto 0', top: `${textY}%`, transform: 'translateY(-50%)', height: 'auto' }}
+                  onPointerDown={step === 2 ? onDragStart : undefined}
+                  onPointerMove={step === 2 ? onDragMove : undefined}
+                  onPointerUp={onDragEnd}
+                  onPointerCancel={onDragEnd}
+                  onKeyDown={step === 2 ? onBlockKey : undefined}
+                  tabIndex={step === 2 ? 0 : undefined}
+                  aria-label={step === 2 ? 'Блок текста: перетащите или используйте стрелки вверх и вниз' : undefined}
+                >
+                  {previewLines.length === 0 ? (
+                    <p className="pl">Здесь появится текст песни</p>
+                  ) : (
+                    previewLines.map((pl) => (
+                      <p key={pl.key} className={`pl ${pl.on ? 'on' : ''}`}>{pl.text}</p>
+                    ))
+                  )}
+                </div>
+
+                <div className="wm" aria-hidden="true">
+                  <svg viewBox="0 0 22 22"><rect x="2" y="9" width="4" height="11" rx="2" /><rect x="9" y="2" width="4" height="18" rx="2" /><rect x="16" y="6" width="4" height="14" rx="2" /></svg>
+                  KaraokeCraft
+                </div>
+              </div>
             </div>
           )}
-
-          <label>
-            Синхронизированные строки (.lrc)
-            <textarea
-              rows={5}
-              value={lrcText}
-              onChange={(e) => handleLrcChange(e.target.value)}
-              style={{
-                fontFamily: 'monospace',
-                fontSize: '12px',
-                lineHeight: 1.4,
-              }}
-            />
-          </label>
-
-          <label>
-            Теги (через запятую)
-            <input
-              type="text"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="поп, инди, ночь"
-            />
-          </label>
-
-          <div className="ac2">
-            <button type="button" className="bt pr" id="pub" onClick={handlePublish}>
-              Опубликовать
-            </button>
-            <button
-              type="button"
-              className="bt dl"
-              onClick={() => setIsDownloadOpen(true)}
-            >
-              Скачать видео
-            </button>
-          </div>
         </div>
-
-        {/* Live Container Query Preview Frame */}
-        <div className="pv">
-          <div
-            className={`fr ${aspectRatio}`}
-            id="fr"
-            style={
-              {
-                '--sb': backgroundColor,
-                '--sa': activeColor,
-                '--st': textColor,
-                '--sf': FONT_MAP[font] || FONT_MAP.Onest,
-                '--sz': fontSize,
-              } as React.CSSProperties
-            }
-          >
-            <div className="ft" id="ft">
-              {title || 'Без названия'}
-            </div>
-
-            <div className="fl" id="fl">
-              {previewLines.map((pl, i) => (
-                <p key={`${pl.key}-${i}`} className={`pl ${pl.isActive ? 'on' : ''}`}>
-                  {pl.text}
-                </p>
-              ))}
-            </div>
-
-            <div className="wm">KaraokeCraft</div>
-          </div>
-        </div>
-      </section>
-
-      {/* Toast Notification */}
-      <div className={`ts ${toastMessage ? 'on' : ''}`} id="ts" role="status" aria-live="polite">
-        {toastMessage}
       </div>
 
-      {/* Video Downloader Modal */}
-      <VideoDownloaderModal
-        karaoke={currentPreviewKaraoke}
-        open={isDownloadOpen}
-        onClose={() => setIsDownloadOpen(false)}
-      />
+      <div className={`ts ${toast ? 'on' : ''}`} id="ts" role="status" aria-live="polite" style={{ bottom: 24 }}>{toast}</div>
+
+      <VideoDownloaderModal karaoke={previewKaraoke} isOpen={isDownloadOpen} onClose={() => setIsDownloadOpen(false)} />
     </>
   );
 }
