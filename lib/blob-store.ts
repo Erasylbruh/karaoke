@@ -18,7 +18,8 @@ async function uploadToSupabase(file: Blob, path: string): Promise<string> {
     method: 'POST',
     headers: {
       apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
+      // New-style keys (sb_publishable_…) are not JWTs and go in `apikey` only; legacy anon keys also need the Bearer header.
+      ...(SUPABASE_KEY.startsWith('sb_') ? {} : { Authorization: `Bearer ${SUPABASE_KEY}` }),
       'Content-Type': file.type || 'application/octet-stream',
       'x-upsert': 'false',
     },
