@@ -157,7 +157,7 @@
   background: linear-gradient(90deg, var(--lpa) var(--w, 0%), rgba(255, 255, 255, 0.55) var(--w, 0%));
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.cv .lp p.pa { opacity: 0.8; --w: 100%; }
+.cv .lp p.pa { opacity: 0.6; --w: 100%; }
 .cv .lp p.pa span { --w: 100%; }
 .cv .lpt { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px 12px; font: 600 11px var(--fb); color: rgba(255,255,255,0.7); background: linear-gradient(transparent, rgba(0,0,0,0.5)); opacity: 0; transition: opacity 0.2s; }
 .cv.lpon .lpt { opacity: 1; }

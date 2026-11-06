@@ -160,7 +160,7 @@ export function drawKaraokeFrame(
     let alpha = 0.3;
     if (idx < activeIdx) {
       p = 1;
-      alpha = 0.85;
+      alpha = 0.6; // sung lines: accent colour, a bit transparent
     } else if (idx === activeIdx) {
       const line = lyrics[idx];
       const end = line.end ?? lyrics[idx + 1]?.time ?? totalSec;
