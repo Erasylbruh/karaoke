@@ -12,6 +12,24 @@ import {
 import { Karaoke } from '@/lib/types';
 import { synthPlayer } from '@/lib/audio-synthesizer';
 import { resolveBlobUrl } from '@/lib/blob-store';
+import fixWebmDuration from 'fix-webm-duration';
+
+const FPS = 30;
+
+/**
+ * Frame clock running in a Worker: unlike requestAnimationFrame it keeps ticking when the tab is
+ * not in front, so the video doesn't freeze or drop to a few frames per second.
+ */
+function startTicker(onTick: () => void): () => void {
+  const src = `let t=setInterval(()=>postMessage(0),${Math.round(1000 / FPS)});onmessage=()=>clearInterval(t);`;
+  const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+  const worker = new Worker(url);
+  worker.onmessage = onTick;
+  return () => {
+    worker.terminate();
+    URL.revokeObjectURL(url);
+  };
+}
 import { registerDownload, getGuestId } from '@/lib/storage';
 import { useAuth } from '@/context/AuthContext';
 
@@ -40,6 +58,7 @@ export default function VideoDownloaderModal({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const animationFrameRef = useRef<number | null>(null);
+  const stopTickerRef = useRef<(() => void) | null>(null);
   const trackAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const [fileExt, setFileExt] = useState('webm');
@@ -60,6 +79,7 @@ export default function VideoDownloaderModal({
   useEffect(() => {
     return () => {
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      stopTickerRef.current?.();
       if (videoUrl) URL.revokeObjectURL(videoUrl);
     };
   }, [videoUrl]);
@@ -177,7 +197,7 @@ export default function VideoDownloaderModal({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const canvasStream = canvas.captureStream(30);
+    const canvasStream = canvas.captureStream(FPS);
 
     // Sound: the track's own uploaded audio, captured silently through Web Audio;
     // the built-in synth preset only when the project has no audio file.
@@ -214,14 +234,16 @@ export default function VideoDownloaderModal({
     const combinedStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
 
     const mimeType =
-      ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'].find((t) =>
+      // MP4 (H.264 + AAC) plays everywhere, including phones and Instagram/TikTok uploads; WebM is the fallback.
+      ['video/mp4;codecs=avc1.42E01F,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp8,opus', 'video/webm'].find((t) =>
         MediaRecorder.isTypeSupported(t)
       ) || 'video/webm';
     setFileExt(mimeType.startsWith('video/mp4') ? 'mp4' : 'webm');
 
     const recorder = new MediaRecorder(combinedStream, {
       mimeType,
-      videoBitsPerSecond: 3000000,
+      videoBitsPerSecond: 5_000_000,
+      audioBitsPerSecond: 160_000,
     });
 
     mediaRecorderRef.current = recorder;
@@ -232,8 +254,15 @@ export default function VideoDownloaderModal({
       }
     };
 
-    recorder.onstop = () => {
-      const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+    let recordedMs = 0;
+    recorder.onstop = async () => {
+      stopTickerRef.current?.();
+      stopTickerRef.current = null;
+      let blob = new Blob(recordedChunksRef.current, { type: mimeType });
+      // MediaRecorder writes WebM without a duration, so players can't seek or show the length.
+      if (mimeType.startsWith('video/webm')) {
+        blob = await fixWebmDuration(blob, recordedMs, { logger: false });
+      }
       const url = URL.createObjectURL(blob);
       setVideoUrl(url);
       setIsRecording(false);
@@ -241,7 +270,7 @@ export default function VideoDownloaderModal({
       stopSound();
     };
 
-    recorder.start(100);
+    recorder.start(1000);
     // Full length of the song; the clock follows the audio so lyrics stay in sync with the sound.
     const recordDuration =
       trackAudio && Number.isFinite(trackAudio.duration) && trackAudio.duration > 0 ? trackAudio.duration : karaoke.duration || 40;
@@ -252,23 +281,26 @@ export default function VideoDownloaderModal({
       synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', 0);
     }
     const startTime = performance.now();
+    let lastProgress = 0;
 
-    const recordLoop = (currentTime: number) => {
-      const elapsed = trackAudio ? trackAudio.currentTime : (currentTime - startTime) / 1000;
-      setProgress(Math.min(100, (elapsed / recordDuration) * 100));
-
+    drawFrame(ctx, 0);
+    stopTickerRef.current = startTicker(() => {
+      const now = performance.now();
+      const elapsed = trackAudio ? trackAudio.currentTime : (now - startTime) / 1000;
       drawFrame(ctx, elapsed);
-
-      if (elapsed < recordDuration && mediaRecorderRef.current?.state === 'recording') {
-        animationFrameRef.current = requestAnimationFrame(recordLoop);
-      } else {
-        if (mediaRecorderRef.current?.state === 'recording') {
-          mediaRecorderRef.current.stop();
-        }
+      if (now - lastProgress > 250) {
+        lastProgress = now;
+        setProgress(Math.min(100, (elapsed / recordDuration) * 100));
       }
-    };
-
-    animationFrameRef.current = requestAnimationFrame(recordLoop);
+      const finished = elapsed >= recordDuration || (trackAudio?.ended ?? false);
+      if (finished && mediaRecorderRef.current?.state === 'recording') {
+        recordedMs = now - startTime;
+        stopTickerRef.current?.();
+        stopTickerRef.current = null;
+        setProgress(100);
+        mediaRecorderRef.current.stop();
+      }
+    });
   };
 
   const handleDownloadSnapshot = () => {

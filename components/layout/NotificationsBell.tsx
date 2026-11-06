@@ -11,6 +11,7 @@ import { AppNotification } from '@/lib/types';
 const ICON: Record<AppNotification['type'], string> = {
   like: '♥',
   comment: '✎',
+  reply: '↩',
   playlist: '＋',
   follow: '★',
   download: '↓',
@@ -27,7 +28,7 @@ function ago(iso: string) {
 }
 
 function linkFor(n: AppNotification): string | null {
-  if (n.karaokeId) return `/karaoke/${n.karaokeId}`;
+  if (n.karaokeId) return `/karaoke/${n.karaokeId}${n.commentId ? `#c-${n.commentId}` : ''}`;
   if (n.type === 'follow' && n.actorId) {
     const u = getUserById(n.actorId);
     return u ? `/u/${u.username}` : null;

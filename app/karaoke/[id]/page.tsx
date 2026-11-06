@@ -121,6 +121,7 @@ function KaraokePlayerContent() {
   const [isSmall, setIsSmall] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [canFullscreen, setCanFullscreen] = useState(false);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   useDataVersion(); // playlist state and review count stay live
   const [guestLeft, setGuestLeft] = useState(GUEST_PLAY_LIMIT);
 
@@ -259,6 +260,15 @@ function KaraokePlayerContent() {
       if (span) (span as HTMLElement).style.setProperty('--w', `${progress}%`);
     }
   }, [currentTime, karaoke, duration]);
+
+  // A link like /karaoke/{id}#c-{commentId} (from a reply notification) opens the reviews on that comment.
+  useEffect(() => {
+    if (!karaoke) return;
+    const m = window.location.hash.match(/^#c-(.+)$/);
+    if (!m) return;
+    setHighlightId(decodeURIComponent(m[1]));
+    reviewsRef.current?.showModal();
+  }, [karaoke]);
 
   // Fullscreen (not available on iPhone Safari, so the button is hidden there).
   useEffect(() => {
@@ -619,7 +629,7 @@ function KaraokePlayerContent() {
               <X aria-hidden="true" size={22} />
             </button>
           </div>
-          <CommentsSection karaokeId={karaoke.id} />
+          <CommentsSection karaokeId={karaoke.id} trackAuthorId={karaoke.authorId} highlightId={highlightId} />
         </dialog>
       </section>
 

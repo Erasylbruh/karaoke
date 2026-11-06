@@ -54,12 +54,6 @@ export default function Navbar() {
         <span className="hd-brand">KaraokeCraft</span>
       </Link>
 
-      <nav className="hd-nav" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-        <Link href="/" className={`nv ${is('/') ? 'active' : ''}`} aria-current={is('/') ? 'page' : undefined}>
-          Главная
-        </Link>
-      </nav>
-
       <span className="hd-space" style={{ flex: 1 }} />
 
       <Link href="/create" className="bt pr hd-create" aria-label="Создать караоке" aria-current={is('/create') ? 'page' : undefined}>

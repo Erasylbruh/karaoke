@@ -90,9 +90,6 @@ function CatalogContent() {
       <div className="hero">
         <div>
           <h1>Покажите песню так, как вы её слышите</h1>
-          <p className="sub">
-            Загрузите трек, расставьте строки по времени и опубликуйте караоке со своим шрифтом и цветами.
-          </p>
           <label className="sr">
             <svg className="ic" aria-hidden="true" viewBox="0 0 24 24">
               <circle cx="11" cy="11" r="8" />

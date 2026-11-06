@@ -177,7 +177,7 @@ export function notify(
   userId: string,
   type: NotificationType,
   text: string,
-  extra: { actorId?: string; actorName?: string; karaokeId?: string; karaokeTitle?: string } = {}
+  extra: { actorId?: string; actorName?: string; karaokeId?: string; karaokeTitle?: string; commentId?: string } = {}
 ) {
   if (!userId || (extra.actorId && extra.actorId === userId)) return;
   NT.set({ id: 'nt-' + uid(), userId, type, text, createdAt: new Date().toISOString(), read: false, ...extra });
@@ -303,11 +303,42 @@ export function getComments(karaokeId: string): Comment[] {
 export function addComment(comment: Comment): Comment {
   CM.set(comment);
   registerInteraction(comment.karaokeId, comment.userId, 'comment');
-  notifyAuthor(comment.karaokeId, comment.userId, 'comment', 'прокомментировал(а)');
+  const k = K.get(comment.karaokeId);
+  const parent = comment.parentId ? CM.get(comment.parentId) : undefined;
+  if (parent) {
+    // Reply: tell the person who was answered, quoting the reply and linking to it.
+    const quote = comment.content.length > 80 ? comment.content.slice(0, 80) + '…' : comment.content;
+    notify(parent.userId, 'reply', `${comment.userName} ответил(а) на ваш отзыв: «${quote}»`, {
+      actorId: comment.userId,
+      actorName: comment.userName,
+      karaokeId: comment.karaokeId,
+      karaokeTitle: k?.title,
+      commentId: comment.id,
+    });
+  }
+  if (k && k.authorId !== parent?.userId) {
+    notify(k.authorId, 'comment', `${comment.userName} оставил(а) отзыв о «${k.title}»`, {
+      actorId: comment.userId,
+      actorName: comment.userName,
+      karaokeId: comment.karaokeId,
+      karaokeTitle: k.title,
+      commentId: comment.id,
+    });
+  }
   return comment;
 }
 
+/** Track author or admin pins a top-level review; only one stays pinned per track. */
+export function togglePinComment(id: string) {
+  const c = CM.get(id);
+  if (!c) return;
+  const pin = !c.pinned;
+  if (pin) CM.all().filter((x) => x.karaokeId === c.karaokeId && x.pinned && x.id !== id).forEach((x) => CM.patch(x.id, { pinned: false }));
+  CM.patch(id, { pinned: pin });
+}
+
 export function deleteComment(id: string): boolean {
+  CM.all().filter((c) => c.parentId === id).forEach((c) => CM.remove(c.id));
   CM.remove(id);
   return true;
 }

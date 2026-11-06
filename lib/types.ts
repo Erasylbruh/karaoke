@@ -89,6 +89,10 @@ export interface Comment {
   userAvatar: string;
   content: string;
   createdAt: string;
+  /** Set on replies: id of the top-level review being answered. */
+  parentId?: string;
+  /** Pinned by the track author or an admin; shown first. */
+  pinned?: boolean;
 }
 
 export type UserRole = 'user' | 'admin';
@@ -132,7 +136,7 @@ export type InteractionType = 'listen' | 'finish' | 'like' | 'playlist' | 'comme
 
 export type SortOption = 'recommended' | 'popular' | 'newest' | 'oldest';
 
-export type NotificationType = 'like' | 'comment' | 'playlist' | 'follow' | 'download' | 'warning' | 'ban';
+export type NotificationType = 'like' | 'comment' | 'reply' | 'playlist' | 'follow' | 'download' | 'warning' | 'ban';
 
 export interface AppNotification {
   id: string;
@@ -143,6 +147,8 @@ export interface AppNotification {
   actorName?: string;
   karaokeId?: string;
   karaokeTitle?: string;
+  /** Review the notification points to (opened via /karaoke/{id}#c-{commentId}). */
+  commentId?: string;
   text: string;
   createdAt: string;
   read: boolean;
