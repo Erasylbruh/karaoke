@@ -338,11 +338,51 @@ function KaraokePlayerContent() {
   };
 
   // Mobile: the info block collapses into a compact row while the lyrics are scrolled.
+  // The collapsed header has "weight": scrolling back up only returns to the start of the
+  // lyrics; a second, separate pull down (or a tap on the header) opens it again.
+  const reachedTopAt = useRef<number | null>(null);
+  const pull = useRef<{ startY: number; armed: boolean } | null>(null);
+  const wheelPull = useRef({ sum: 0, last: 0 });
+  /** Pull distance (px) that opens the header. */
+  const PULL_TO_OPEN = 70;
+
   const handleLyricsScroll = () => {
     if (window.innerWidth > 820) return;
     const top = lyricsContainerRef.current?.scrollTop ?? 0;
     if (top > 40) setIsSmall(true);
-    else if (top < 6) setIsSmall(false);
+    if (top <= 1) reachedTopAt.current ??= performance.now();
+    else reachedTopAt.current = null;
+  };
+
+  /** At the top already, and since a moment ago (so it is a new gesture, not the same fling). */
+  const restingAtTop = () =>
+    (lyricsContainerRef.current?.scrollTop ?? 1) <= 1 &&
+    reachedTopAt.current !== null &&
+    performance.now() - reachedTopAt.current > 250;
+
+  const handleLyricsTouchStart = (e: React.TouchEvent) => {
+    pull.current = isSmall ? { startY: e.touches[0].clientY, armed: restingAtTop() } : null;
+  };
+  const handleLyricsTouchMove = (e: React.TouchEvent) => {
+    const p = pull.current;
+    if (!p?.armed) return;
+    if (e.touches[0].clientY - p.startY > PULL_TO_OPEN) {
+      pull.current = null;
+      setIsSmall(false);
+    }
+  };
+  // Mouse wheel / touchpad on narrow screens: the same rule with accumulated wheel distance.
+  const handleLyricsWheel = (e: React.WheelEvent) => {
+    if (!isSmall || e.deltaY >= 0 || !restingAtTop()) return;
+    const w = wheelPull.current;
+    const now = performance.now();
+    if (now - w.last > 400) w.sum = 0;
+    w.last = now;
+    w.sum += -e.deltaY;
+    if (w.sum > PULL_TO_OPEN * 2) {
+      w.sum = 0;
+      setIsSmall(false);
+    }
   };
 
   // ---- Guest gating ----
@@ -510,7 +550,10 @@ function KaraokePlayerContent() {
   );
   const actions = (
       <div className="pa2" onClick={(event) => {
-        if (event.target instanceof Element && event.target.closest('button')) actionsRef.current?.close();
+        // On phones these buttons sit in the bottom sheet, which closes after an action. A button
+        // that only opens a menu (Скачать ▾) must keep it open, or the menu vanishes with it.
+        const btn = event.target instanceof Element ? event.target.closest('button') : null;
+        if (btn && !btn.matches('[aria-haspopup="menu"]')) actionsRef.current?.close();
       }}>
         <button className="bt player-like" aria-pressed={isLiked} aria-label="Лайк" onClick={handleLike}>
           <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
@@ -581,7 +624,13 @@ function KaraokePlayerContent() {
           />
         )}
 
-        <aside className={`pi ${isSmall ? 'sm' : ''}`}>
+        <aside
+          className={`pi ${isSmall ? 'sm' : ''}`}
+          onClick={(e) => {
+            // Tapping the collapsed header (not its buttons or links) opens it.
+            if (isSmall && !(e.target as HTMLElement).closest('button, a, dialog')) setIsSmall(false);
+          }}
+        >
           <Link href="/" className="bt bk" aria-label="Назад в каталог">
             <ChevronLeft aria-hidden="true" size={20} />
             <span className="t">Каталог</span>
@@ -623,7 +672,16 @@ function KaraokePlayerContent() {
           </dialog>
         </aside>
 
-        <div className="ly" id="ly" ref={lyricsContainerRef} onScroll={handleLyricsScroll} aria-label="Текст песни">
+        <div
+          className="ly"
+          id="ly"
+          ref={lyricsContainerRef}
+          onScroll={handleLyricsScroll}
+          onTouchStart={handleLyricsTouchStart}
+          onTouchMove={handleLyricsTouchMove}
+          onWheel={handleLyricsWheel}
+          aria-label="Текст песни"
+        >
           {karaoke.lyrics.map((line, i) => {
             const lineClass = `ln ${i === activeIdx ? 'on' : ''} ${i < activeIdx ? 'pa' : ''}`.trim();
             return (
