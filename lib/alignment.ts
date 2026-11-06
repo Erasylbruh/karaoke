@@ -21,10 +21,37 @@ export interface AlignmentResult {
 
 export const ALIGNER_URL = (process.env.NEXT_PUBLIC_ALIGNER_URL || 'http://localhost:8787').replace(/\/$/, '');
 
-/** True when the aligner answers within a couple of seconds. */
-export async function isAlignerOnline(): Promise<boolean> {
+/** The service runs on this computer (as opposed to a tunnel URL on the internet). */
+const IS_LOOPBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(ALIGNER_URL);
+
+/**
+ * Chrome (142+) asks the user before a site from the internet may call localhost
+ * ("Local network access"). Returns that permission's state, or 'unknown' where the browser
+ * has no such permission (then the request simply goes through).
+ */
+export async function localAccessState(): Promise<'granted' | 'denied' | 'prompt' | 'unknown'> {
+  if (!IS_LOOPBACK || typeof window === 'undefined') return 'granted';
+  if (['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)) return 'granted';
+  for (const name of ['local-network-access', 'loopback-network']) {
+    try {
+      return (await navigator.permissions.query({ name } as unknown as PermissionDescriptor)).state;
+    } catch {
+      // permission name not supported by this browser
+    }
+  }
+  return 'unknown';
+}
+
+export const LOCAL_ACCESS_HINT =
+  'Браузер запретил сайту доступ к сервису на компьютере. Нажмите значок слева от адреса сайта → «Настройки сайта» → «Доступ к локальной сети» → «Разрешить», затем обновите страницу.';
+
+/**
+ * True when the aligner answers. `timeoutMs` must be long when the call may show Chrome's
+ * "local network access" prompt, otherwise the request is cancelled while the prompt is open.
+ */
+export async function isAlignerOnline(timeoutMs = 2000): Promise<boolean> {
   try {
-    const res = await fetch(`${ALIGNER_URL}/health`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${ALIGNER_URL}/health`, { signal: AbortSignal.timeout(timeoutMs) });
     return res.ok;
   } catch {
     return false;

@@ -18,7 +18,7 @@ import {
   loadCustomFont,
   looksLikeFont,
 } from '@/lib/fonts';
-import { alignLyrics, isAlignerOnline } from '@/lib/alignment';
+import { alignLyrics, isAlignerOnline, localAccessState, LOCAL_ACCESS_HINT } from '@/lib/alignment';
 import VideoDownloaderModal from '@/components/karaoke/VideoDownloaderModal';
 import Tutorial from '@/components/ui/Tutorial';
 
@@ -139,7 +139,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const showToast = (msg: string) => {
     setToast(msg);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2800);
+    toastTimer.current = setTimeout(() => setToast(null), Math.max(2800, msg.length * 60));
   };
 
   const [editState, setEditState] = useState<'none' | 'loaded' | 'denied'>('none');
@@ -256,7 +256,13 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   useEffect(() => {
     if (step !== 1) return;
     let alive = true;
-    void isAlignerOnline().then((ok) => alive && setAlignerOnline(ok));
+    // Don't trigger the browser's permission prompt on page load: only check when already allowed.
+    void localAccessState().then(async (state) => {
+      if (state === 'granted' || state === 'unknown') {
+        const ok = await isAlignerOnline();
+        if (alive) setAlignerOnline(ok);
+      }
+    });
     return () => {
       alive = false;
     };
@@ -264,9 +270,17 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
 
   const runAutoTiming = async () => {
     if (!audioUrl || lines.length === 0) return showToast('Нужны аудио и текст песни');
-    const online = await isAlignerOnline();
+    if ((await localAccessState()) === 'denied') return showToast(LOCAL_ACCESS_HINT);
+    // Long timeout: this request may show Chrome's "local network access" prompt.
+    const online = await isAlignerOnline(60_000);
     setAlignerOnline(online);
-    if (!online) return showToast('Сервис авто-тайминга не запущен (aligner/README.md)');
+    if (!online) {
+      return showToast(
+        (await localAccessState()) === 'denied'
+          ? LOCAL_ACCESS_HINT
+          : 'Сервис авто-тайминга не запущен: запустите aligner/start.ps1 на компьютере'
+      );
+    }
     if (lines.some((l) => l.time > 0) && !window.confirm('Заменить текущие тайминги автоматическими?')) return;
     setAligning(true);
     try {
