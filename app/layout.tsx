@@ -5,6 +5,7 @@ import './ui.css';
 import { AuthProvider } from '@/context/AuthContext';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
+import SiteChrome from '@/components/layout/SiteChrome';
 import AuthPrompt from '@/components/ui/AuthPrompt';
 import DataProvider from '@/components/DataProvider';
 
@@ -35,15 +36,17 @@ export default function RootLayout({
       <body>
         <DataProvider>
         <AuthProvider>
-          <Suspense fallback={<header className="hd"><div className="lg">KaraokeCraft</div></header>}>
-            <Navbar />
+          <Suspense fallback={null}>
+            <SiteChrome><Navbar /></SiteChrome>
           </Suspense>
           <main>
             <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
               {children}
             </Suspense>
           </main>
-          <Footer />
+          <Suspense fallback={null}>
+            <SiteChrome><Footer /></SiteChrome>
+          </Suspense>
           <AuthPrompt />
         </AuthProvider>
         </DataProvider>

@@ -20,7 +20,9 @@ const TICKER_LINES = [
   'Пусть услышит весь район',
 ];
 
-type Sort = 'rec' | 'pop' | 'new' | 'old';
+type Sort = 'pop' | 'new' | 'old';
+
+const RECOMMENDED_COUNT = 6;
 
 function CatalogContent() {
   const searchParams = useSearchParams();
@@ -28,7 +30,7 @@ function CatalogContent() {
 
   const [karaokes, setKaraokes] = useState<Karaoke[]>([]);
   const [searchQuery, setSearchQuery] = useState(initialSearch);
-  const [sort, setSort] = useState<Sort>('rec');
+  const [sort, setSort] = useState<Sort>('pop');
   const [tickerIndex, setTickerIndex] = useState(0);
 
   useEffect(() => {
@@ -52,9 +54,6 @@ function CatalogContent() {
     });
 
     switch (sort) {
-      case 'rec':
-        // "Recommended" is the site-wide list: only tracks that reached the score threshold.
-        return result.filter((x) => x.isFeatured).sort((a, b) => b.recommendationScore - a.recommendationScore);
       case 'pop':
         return result.sort((a, b) => b.viewsCount - a.viewsCount);
       case 'new':
@@ -64,8 +63,15 @@ function CatalogContent() {
     }
   }, [karaokes, searchQuery, sort]);
 
+  // Tracks that reached the threshold; if there are none yet, the ones closest to it by score.
+  const recommended = useMemo(() => {
+    const byScore = [...karaokes].sort((a, b) => b.recommendationScore - a.recommendationScore);
+    const featured = byScore.filter((x) => x.isFeatured);
+    return (featured.length > 0 ? featured : byScore).slice(0, RECOMMENDED_COUNT);
+  }, [karaokes]);
+  const searching = searchQuery.trim().length > 0;
+
   const chips: { id: Sort; label: string }[] = [
-    { id: 'rec', label: 'Рекомендованные' },
     { id: 'pop', label: 'Популярные' },
     { id: 'new', label: 'Новые' },
     { id: 'old', label: 'Старые' },
@@ -77,7 +83,7 @@ function CatalogContent() {
         page="home"
         steps={[
           { title: 'Каталог караоке', text: 'Наведите курсор на обложку: строки песни запустятся как беззвучное караоке.' },
-          { title: 'Поиск и сортировка', text: 'Ищите по названию, исполнителю или тегу. «Рекомендованные» — треки, которые набрали популярность у слушателей.' },
+          { title: 'Поиск и сортировка', text: 'Ищите по названию, исполнителю или жанру. «Рекомендованные» — треки, которые набрали популярность у слушателей.' },
           { title: 'Свои караоке', text: 'Кнопка «Создать» в шапке открывает редактор: загрузите трек, расставьте тайминги и опубликуйте.' },
         ]}
       />
@@ -95,7 +101,7 @@ function CatalogContent() {
             <input
               id="q"
               type="search"
-              placeholder="Найти песню, артиста или тег"
+              placeholder="Найти песню, артиста или жанр"
               aria-label="Поиск"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -110,6 +116,20 @@ function CatalogContent() {
         </div>
       </div>
 
+      {!searching && recommended.length > 0 && (
+        <section className="home-sec" aria-labelledby="rec-title">
+          <h2 id="rec-title" className="home-h">Рекомендованные</h2>
+          <div className="rec-row">
+            {recommended.map((item) => (
+              <KaraokeTile key={item.id} karaoke={item} authorName={getAuthor(item).name} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="home-sec-head">
+        <h2 className="home-h">{searching ? 'Результаты поиска' : 'Все работы'}</h2>
+      </div>
       <div className="bar" id="sorts" role="group" aria-label="Сортировка">
         {chips.map((c) => (
           <button key={c.id} className="ch" aria-pressed={sort === c.id} onClick={() => setSort(c.id)}>
@@ -131,8 +151,8 @@ function CatalogContent() {
         ) : (
           <p className="em">
             {searchQuery
-              ? `Ничего не нашли по запросу «${searchQuery}». Попробуйте другое название или тег.`
-              : 'Пока нет рекомендованных треков — загляните в «Новые» или «Популярные».'}
+              ? `Ничего не нашли по запросу «${searchQuery}». Попробуйте другое название или жанр.`
+              : 'Пока нет опубликованных работ. Создайте первую!'}
           </p>
         )}
       </div>

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { Karaoke } from '@/lib/types';
 import { synthPlayer } from '@/lib/audio-synthesizer';
+import { resolveBlobUrl } from '@/lib/blob-store';
 import { registerDownload, getGuestId } from '@/lib/storage';
 import { useAuth } from '@/context/AuthContext';
 
@@ -39,6 +40,18 @@ export default function VideoDownloaderModal({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const animationFrameRef = useRef<number | null>(null);
+  const trackAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const [fileExt, setFileExt] = useState('webm');
+
+  /** Stops whatever is producing sound for the recording (uploaded track or synth). */
+  const stopSound = () => {
+    synthPlayer?.stop();
+    trackAudioRef.current?.pause();
+    trackAudioRef.current = null;
+    void audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
+  };
 
   useEffect(() => {
     setAspectRatio(initialFormat);
@@ -166,19 +179,45 @@ export default function VideoDownloaderModal({
 
     const canvasStream = canvas.captureStream(30);
 
-    let combinedStream: MediaStream = canvasStream;
-    const audioDest = synthPlayer?.getMediaStreamDestination();
-    if (audioDest && audioDest.stream.getAudioTracks().length > 0) {
-      combinedStream = new MediaStream([
-        ...canvasStream.getVideoTracks(),
-        ...audioDest.stream.getAudioTracks(),
-      ]);
+    // Sound: the track's own uploaded audio, captured silently through Web Audio;
+    // the built-in synth preset only when the project has no audio file.
+    let audioTracks: MediaStreamTrack[] = [];
+    let trackAudio: HTMLAudioElement | null = null;
+    const audioSrc = await resolveBlobUrl(karaoke.audioUrl);
+    if (audioSrc) {
+      try {
+        trackAudio = new Audio();
+        trackAudio.crossOrigin = 'anonymous';
+        trackAudio.preload = 'auto';
+        trackAudio.src = audioSrc;
+        await new Promise<void>((resolve, reject) => {
+          trackAudio!.oncanplaythrough = () => resolve();
+          trackAudio!.onerror = () => reject(new Error('audio'));
+          trackAudio!.load();
+        });
+        const actx = new AudioContext();
+        const source = actx.createMediaElementSource(trackAudio);
+        const dest = actx.createMediaStreamDestination();
+        source.connect(dest);
+        audioCtxRef.current = actx;
+        trackAudioRef.current = trackAudio;
+        audioTracks = dest.stream.getAudioTracks();
+      } catch {
+        trackAudio = null;
+        setRecordingStatus('Не удалось загрузить аудио трека, видео будет с демо-мелодией');
+      }
     }
+    if (!trackAudio) {
+      const synthDest = synthPlayer?.getMediaStreamDestination();
+      audioTracks = synthDest ? synthDest.stream.getAudioTracks() : [];
+    }
+    const combinedStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
 
-    let mimeType = 'video/webm;codecs=vp9';
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = 'video/webm';
-    }
+    const mimeType =
+      ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'].find((t) =>
+        MediaRecorder.isTypeSupported(t)
+      ) || 'video/webm';
+    setFileExt(mimeType.startsWith('video/mp4') ? 'mp4' : 'webm');
 
     const recorder = new MediaRecorder(combinedStream, {
       mimeType,
@@ -199,17 +238,23 @@ export default function VideoDownloaderModal({
       setVideoUrl(url);
       setIsRecording(false);
       setRecordingStatus('Готово к скачиванию!');
-      synthPlayer?.stop();
+      stopSound();
     };
 
     recorder.start(100);
-    synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', 0);
-
-    const recordDuration = Math.min(karaoke.duration, 40);
+    // Full length of the song; the clock follows the audio so lyrics stay in sync with the sound.
+    const recordDuration =
+      trackAudio && Number.isFinite(trackAudio.duration) && trackAudio.duration > 0 ? trackAudio.duration : karaoke.duration || 40;
+    if (trackAudio) {
+      trackAudio.currentTime = 0;
+      await trackAudio.play();
+    } else {
+      synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', 0);
+    }
     const startTime = performance.now();
 
     const recordLoop = (currentTime: number) => {
-      const elapsed = (currentTime - startTime) / 1000;
+      const elapsed = trackAudio ? trackAudio.currentTime : (currentTime - startTime) / 1000;
       setProgress(Math.min(100, (elapsed / recordDuration) * 100));
 
       drawFrame(ctx, elapsed);
@@ -254,7 +299,7 @@ export default function VideoDownloaderModal({
         padding: '16px',
       }}
       onClick={() => {
-        synthPlayer?.stop();
+        stopSound();
         onClose();
       }}
     >
@@ -280,7 +325,7 @@ export default function VideoDownloaderModal({
           </div>
           <button
             onClick={() => {
-              synthPlayer?.stop();
+              stopSound();
               onClose();
             }}
             style={{
@@ -405,7 +450,7 @@ export default function VideoDownloaderModal({
               ) : (
                 <>
                   <Video style={{ width: '16px', height: '16px' }} />
-                  Записать и скачать видео (.webm)
+                  Записать видео со звуком
                 </>
               )}
             </button>
@@ -413,7 +458,7 @@ export default function VideoDownloaderModal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <a
                 href={videoUrl}
-                download={`${karaoke.title.toLowerCase().replace(/\s+/g, '_')}_watermarked.webm`}
+                download={`${karaoke.title.toLowerCase().replace(/\s+/g, '_')}_watermarked.${fileExt}`}
                 onClick={trackDownload}
                 className="bt pr"
                 style={{ width: '100%', padding: '12px', textAlign: 'center' }}

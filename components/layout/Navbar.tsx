@@ -51,29 +51,29 @@ export default function Navbar() {
           <rect x="9" y="2" width="4" height="18" rx="2" />
           <rect x="16" y="6" width="4" height="14" rx="2" />
         </svg>
-        <span>KaraokeCraft</span>
+        <span className="hd-brand">KaraokeCraft</span>
       </Link>
 
-      <nav style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+      <nav className="hd-nav" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
         <Link href="/" className={`nv ${is('/') ? 'active' : ''}`} aria-current={is('/') ? 'page' : undefined}>
           Главная
         </Link>
       </nav>
 
-      <span style={{ flex: 1 }} />
+      <span className="hd-space" style={{ flex: 1 }} />
 
-      <Link href="/create" className="bt pr hd-create" aria-current={is('/create') ? 'page' : undefined}>
-        <Plus style={{ width: 16, height: 16 }} />
-        Создать
+      <Link href="/create" className="bt pr hd-create" aria-label="Создать караоке" aria-current={is('/create') ? 'page' : undefined}>
+        <Plus style={{ width: 16, height: 16 }} aria-hidden="true" />
+        <span className="hd-label">Создать</span>
       </Link>
       <NotificationsBell />
 
       {user ? (
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button
-            className="bt"
+            className="bt hd-user"
             onClick={() => setShowDropdown(!showDropdown)}
-            style={{ padding: '6px 14px 6px 8px' }}
+            aria-label={`Меню профиля: ${user.name}`}
             aria-haspopup="menu"
             aria-expanded={showDropdown}
           >
@@ -83,7 +83,7 @@ export default function Navbar() {
             ) : (
               <UserIcon style={{ width: '16px', height: '16px' }} />
             )}
-            <span style={{ fontSize: '13px' }}>{user.name}</span>
+            <span className="hd-label" style={{ fontSize: '13px' }}>{user.name}</span>
           </button>
 
           {showDropdown && (
@@ -142,7 +142,7 @@ export default function Navbar() {
           <Link href="/login" className="bt">
             Войти
           </Link>
-          <Link href="/register" className="bt">
+          <Link href="/register" className="bt hd-reg">
             Регистрация
           </Link>
         </div>

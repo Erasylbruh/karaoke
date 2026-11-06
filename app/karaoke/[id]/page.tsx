@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import Link from 'next/link';
+import { ChevronDown, ChevronLeft, Download, Ellipsis, ListCheck, ListPlus, Maximize2, MessageSquare, Minimize2, Pause, Play, X } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { Karaoke } from '@/lib/types';
 import {
@@ -19,7 +20,8 @@ import {
   artistSlug,
   isFollowing,
   toggleFollow,
-  getFollowersCount,
+  getPlaylists,
+  getComments,
   GUEST_PLAY_LIMIT,
 } from '@/lib/storage';
 import { useAuth } from '@/context/AuthContext';
@@ -30,6 +32,58 @@ import VideoDownloaderModal from '@/components/karaoke/VideoDownloaderModal';
 import CommentsSection from '@/components/karaoke/CommentsSection';
 import PlaylistPicker from '@/components/karaoke/PlaylistPicker';
 import Tutorial from '@/components/ui/Tutorial';
+import { useDataVersion } from '@/components/DataProvider';
+
+type ExportFormat = 'reel' | 'landscape';
+
+/** «Скачать ▾»: pick the video format, then the export modal records it with the track's audio. */
+function DownloadMenu({ onPick }: { onPick: (f: ExportFormat) => void }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<React.CSSProperties | undefined>(undefined);
+  const ref = useRef<HTMLDivElement | null>(null);
+  // The info column scrolls, so the list is positioned against the viewport instead of being clipped by it.
+  const toggle = () => {
+    const r = ref.current?.getBoundingClientRect();
+    setPos(r && window.innerWidth > 820 ? { position: 'fixed', top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 250) } : undefined);
+    setOpen(!open);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+  const pick = (f: ExportFormat) => {
+    setOpen(false);
+    onPick(f);
+  };
+  return (
+    <div className="dl-menu" ref={ref}>
+      <button className="bt" aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
+        <Download size={16} aria-hidden="true" />
+        <span className="t">Скачать</span>
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="dl-list" role="menu" style={pos}>
+          <button role="menuitem" onClick={() => pick('reel')}>
+            <b>Вертикальное 9:16</b>
+            <span>Reels, Shorts, TikTok</span>
+          </button>
+          <button role="menuitem" onClick={() => pick('landscape')}>
+            <b>Горизонтальное 16:9</b>
+            <span>YouTube, презентации</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const fmt = (n: number) =>
   n >= 1000
@@ -60,15 +114,19 @@ function KaraokePlayerContent() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(40);
   const [audioSrc, setAudioSrc] = useState<string | null>(null);
-  const [isSmallHeader, setIsSmallHeader] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [isDownloadOpen, setIsDownloadOpen] = useState(false);
-  const [showComments, setShowComments] = useState(false);
+  const [downloadFormat, setDownloadFormat] = useState<ExportFormat | null>(null);
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [following, setFollowing] = useState(false);
-  const [followers, setFollowers] = useState(0);
+  const [isSmall, setIsSmall] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [canFullscreen, setCanFullscreen] = useState(false);
+  useDataVersion(); // playlist state and review count stay live
   const [guestLeft, setGuestLeft] = useState(GUEST_PLAY_LIMIT);
 
+  const actionsRef = useRef<HTMLDialogElement>(null);
+  const reviewsRef = useRef<HTMLDialogElement>(null);
+  const playerRef = useRef<HTMLElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timeRef = useRef(0);
   const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
@@ -105,7 +163,6 @@ function KaraokePlayerContent() {
     setLikesCount(item.likesCount);
     setIsLiked(hasUserLiked(item.id, user?.id));
     setFollowing(isFollowing(user?.id, item.authorId));
-    setFollowers(getFollowersCount(item.authorId));
     setGuestLeft(guestPlaysLeft(item.id));
     ensureStyleFont(item.style);
     resolveBlobUrl(item.audioUrl).then(setAudioSrc);
@@ -189,7 +246,7 @@ function KaraokePlayerContent() {
       if (activeEl && container) {
         container.scrollTo({
           top: activeEl.offsetTop - container.clientHeight / 2 + activeEl.clientHeight / 2,
-          behavior: 'smooth',
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
         });
       }
     }
@@ -203,12 +260,25 @@ function KaraokePlayerContent() {
     }
   }, [currentTime, karaoke, duration]);
 
+  // Fullscreen (not available on iPhone Safari, so the button is hidden there).
+  useEffect(() => {
+    setCanFullscreen(!!document.fullscreenEnabled);
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void playerRef.current?.requestFullscreen().catch(() => {});
+  };
+
+  // Mobile: the info block collapses into a compact row while the lyrics are scrolled.
   const handleLyricsScroll = () => {
-    if (typeof window === 'undefined' || window.innerWidth > 820) return;
-    const container = lyricsContainerRef.current;
-    if (!container) return;
-    if (container.scrollTop > 40) setIsSmallHeader(true);
-    else if (container.scrollTop < 6) setIsSmallHeader(false);
+    if (window.innerWidth > 820) return;
+    const top = lyricsContainerRef.current?.scrollTop ?? 0;
+    if (top > 40) setIsSmall(true);
+    else if (top < 6) setIsSmall(false);
   };
 
   // ---- Guest gating ----
@@ -255,6 +325,21 @@ function KaraokePlayerContent() {
     else if (isPlaying && karaoke) synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', clamped);
   };
 
+  // Space toggles playback, arrows seek by 5 s (ignored while typing or inside a popup).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest('input, textarea, select, button, [contenteditable]') || t.closest('dialog[open]'))) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePlay();
+      } else if (e.key === 'ArrowRight') handleSeek(timeRef.current + 5);
+      else if (e.key === 'ArrowLeft') handleSeek(timeRef.current - 5);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   const handleLineClick = (time: number) => {
     if (!isPlaying && !canStartPlayback()) return;
     handleSeek(time + 0.01);
@@ -274,9 +359,9 @@ function KaraokePlayerContent() {
     showToast(res.isLiked ? 'Добавлено в понравившиеся' : 'Удалено из понравившихся');
   };
 
-  const handleOpenDownload = (_format: 'reel' | 'landscape') => {
+  const handleOpenDownload = (format: ExportFormat) => {
     if (!requireAccount('Скачивать видео могут только зарегистрированные пользователи.')) return;
-    setIsDownloadOpen(true);
+    setDownloadFormat(format);
   };
 
   const handleShare = () => {
@@ -295,7 +380,6 @@ function KaraokePlayerContent() {
     if (!karaoke || !requireAccount('Подписываться на авторов можно после входа.')) return;
     const res = toggleFollow(user!.id, karaoke.authorId);
     setFollowing(res.following);
-    setFollowers(res.count);
   };
 
   if (!karaoke) {
@@ -328,6 +412,80 @@ function KaraokePlayerContent() {
     if (l.time <= currentTime) activeIdx = i;
   });
 
+  const inPlaylist = !!user && getPlaylists(user.id).some((p) => p.karaokeIds.includes(karaoke.id));
+  const reviewCount = getComments(karaoke.id).length;
+
+  const metadata = (
+    <>
+      <p className="sm" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span>Автор:</span>
+        {author.username ? (
+          <Link href={`/u/${author.username}`} className="lk" style={{ fontWeight: 600 }}>
+            {author.name}
+          </Link>
+        ) : (
+          <span style={{ fontWeight: 600 }}>{author.name}</span>
+        )}
+        {user?.id !== karaoke.authorId && (
+          <button className="bt sm" onClick={handleFollow} aria-pressed={following}>
+            {following ? 'Вы подписаны' : 'Подписаться'}
+          </button>
+        )}
+      </p>
+      <div className="tg">
+        {karaoke.tags.map((tag) => (
+          <Link key={tag} href={`/tag/${encodeURIComponent(tag)}`}>
+            <span>{tag}</span>
+          </Link>
+        ))}
+      </div>
+      {!user && (
+        <p className="sm" style={{ opacity: 0.8 }}>
+          {guestLeft > 0
+            ? `Бесплатных прослушиваний осталось: ${guestLeft}`
+            : 'Бесплатные прослушивания закончились'}
+        </p>
+      )}
+    </>
+  );
+  const actions = (
+      <div className="pa2" onClick={(event) => {
+        if (event.target instanceof Element && event.target.closest('button')) actionsRef.current?.close();
+      }}>
+        <button className="bt player-like" aria-pressed={isLiked} aria-label="Лайк" onClick={handleLike}>
+          <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+          </svg>
+          <span className="t">
+            {fmt(likesCount)}
+          </span>
+        </button>
+
+        <DownloadMenu onPick={handleOpenDownload} />
+
+        <button className="bt" aria-pressed={inPlaylist} onClick={handlePlaylist}>
+          {inPlaylist ? <ListCheck size={16} aria-hidden="true" /> : <ListPlus size={16} aria-hidden="true" />}
+          <span className="t">{inPlaylist ? 'В плейлисте' : 'В плейлист'}</span>
+        </button>
+
+        <button className="bt" aria-label="Поделиться" onClick={handleShare}>
+          <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="18" cy="5" r="3" />
+            <circle cx="6" cy="12" r="3" />
+            <circle cx="18" cy="19" r="3" />
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+          </svg>
+          <span className="t">Поделиться</span>
+        </button>
+
+        <button className="bt" aria-haspopup="dialog" onClick={() => reviewsRef.current?.showModal()}>
+          <MessageSquare size={16} aria-hidden="true" />
+          <span className="t">Отзывы{reviewCount ? ` · ${reviewCount}` : ''}</span>
+        </button>
+      </div>
+  );
+
   return (
     <>
       <Tutorial
@@ -340,6 +498,8 @@ function KaraokePlayerContent() {
       />
       <section
         id="player"
+        ref={playerRef}
+        className={isFullscreen ? 'fs' : undefined}
         style={
           {
             '--pbg': bg,
@@ -361,107 +521,46 @@ function KaraokePlayerContent() {
           />
         )}
 
-        <aside className={`pi ${isSmallHeader ? 'sm' : ''}`} id="pi">
+        <aside className={`pi ${isSmall ? 'sm' : ''}`}>
           <Link href="/" className="bt bk" aria-label="Назад в каталог">
-            <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m15 18-6-6 6-6" />
-            </svg>
+            <ChevronLeft aria-hidden="true" size={20} />
             <span className="t">Каталог</span>
           </Link>
 
           <div
             className={`cv ${cover ? 'img' : ''}`}
             id="pcv"
-            style={{ background: cover ? `url(${cover})` : `linear-gradient(145deg, ${bg}, ${ac})` }}
+            style={{ backgroundImage: cover ? `url(${cover})` : `linear-gradient(145deg, ${bg}, ${ac})` }}
           >
             {!cover && karaoke.title[0]}
           </div>
 
           <div className="tx">
-            <h2 id="pt">{karaoke.title}</h2>
+            <h1 id="pt" title={karaoke.title}>{karaoke.title}</h1>
             <p id="pa">
               <Link href={`/artist/${encodeURIComponent(artistSlug(karaoke.artist))}`} className="lk">
                 {karaoke.artist}
               </Link>
             </p>
-            <p className="sm" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span>Автор:</span>
-              {author.username ? (
-                <Link href={`/u/${author.username}`} className="lk" style={{ fontWeight: 600 }}>
-                  {author.name}
-                </Link>
-              ) : (
-                <span style={{ fontWeight: 600 }}>{author.name}</span>
-              )}
-              {user?.id !== karaoke.authorId && (
-                <button className="bt sm" onClick={handleFollow} aria-pressed={following}>
-                  {following ? 'Вы подписаны' : 'Подписаться'}
-                </button>
-              )}
-              <span className="mu">{followers} подп.</span>
-            </p>
-            <div className="tg" id="pg">
-              {karaoke.tags.map((tag) => (
-                <Link key={tag} href={`/tag/${encodeURIComponent(tag)}`}>
-                  <span>{tag}</span>
-                </Link>
-              ))}
+            <div className="player-desktop-meta">{metadata}</div>
+          </div>
+
+          <div className="player-desktop-actions">{actions}</div>
+          <button type="button" className="player-icon player-more" aria-label="О песне и действия" aria-haspopup="dialog" onClick={() => actionsRef.current?.showModal()}>
+            <Ellipsis aria-hidden="true" size={22} />
+          </button>
+          <dialog ref={actionsRef} className="player-sheet" aria-labelledby="player-sheet-title">
+            <div className="player-sheet-heading">
+              <h3 id="player-sheet-title">О песне</h3>
+              <button type="button" className="player-icon" aria-label="Закрыть" onClick={() => actionsRef.current?.close()}>
+                <X aria-hidden="true" size={22} />
+              </button>
             </div>
-            {!user && (
-              <p className="sm" style={{ opacity: 0.8 }}>
-                {guestLeft > 0
-                  ? `Бесплатных прослушиваний осталось: ${guestLeft}`
-                  : 'Бесплатные прослушивания закончились'}
-              </p>
-            )}
-          </div>
-
-          <div className="pa2">
-            <button className="bt" id="like" aria-pressed={isLiked} aria-label="Лайк" onClick={handleLike}>
-              <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
-              </svg>
-              <span className="t" id="lk">
-                {fmt(likesCount)}
-              </span>
-            </button>
-
-            <button className="bt dl" aria-label="Скачать видео 9:16" onClick={() => handleOpenDownload('reel')}>
-              <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              <span className="t">Видео 9:16</span>
-            </button>
-
-            <button className="bt dl" aria-label="Скачать видео 16:9" onClick={() => handleOpenDownload('landscape')}>
-              <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              <span className="t">Видео 16:9</span>
-            </button>
-
-            <button className="bt" aria-label="Добавить в плейлист" onClick={handlePlaylist}>
-              <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M3 6h13M3 12h13M3 18h9M19 14v6M16 17h6" />
-              </svg>
-              <span className="t">В плейлист</span>
-            </button>
-
-            <button className="bt" aria-label="Поделиться" onClick={handleShare}>
-              <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="18" cy="5" r="3" />
-                <circle cx="6" cy="12" r="3" />
-                <circle cx="18" cy="19" r="3" />
-                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
-              </svg>
-              <span className="t">Поделиться</span>
-            </button>
-
-            <button className="bt" aria-label="Комментарии" onClick={() => setShowComments(!showComments)}>
-              <span className="t">{showComments ? 'Скрыть отзывы' : 'Отзывы'}</span>
-            </button>
-          </div>
+            <div onClick={(event) => {
+              if (event.target instanceof Element && event.target.closest('button')) actionsRef.current?.close();
+            }}>{metadata}</div>
+            {actions}
+          </dialog>
         </aside>
 
         <div className="ly" id="ly" ref={lyricsContainerRef} onScroll={handleLyricsScroll} aria-label="Текст песни">
@@ -481,42 +580,47 @@ function KaraokePlayerContent() {
             );
           })}
 
-          {showComments && (
-            <div style={{ marginTop: '80px', paddingBottom: '40px', maxWidth: '600px' }}>
-              <CommentsSection karaokeId={karaoke.id} />
-            </div>
-          )}
         </div>
 
         <div className="pc">
-          <button className="pp" id="pp" aria-label={isPlaying ? 'Пауза' : 'Играть'} onClick={handleTogglePlay}>
-            {isPlaying ? (
-              <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="6" y="4" width="4" height="16" />
-                <rect x="14" y="4" width="4" height="16" />
-              </svg>
-            ) : (
-              <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-                <polygon points="6 3 20 12 6 21 6 3" />
-              </svg>
-            )}
+          <button className="pp" aria-label={isPlaying ? 'Пауза' : 'Играть'} onClick={handleTogglePlay}>
+            {isPlaying ? <Pause size={20} fill="currentColor" aria-hidden="true" /> : <Play size={20} fill="currentColor" aria-hidden="true" />}
           </button>
-
-          <input
-            id="sk"
-            type="range"
-            min="0"
-            max={duration}
-            step="0.1"
-            value={currentTime}
-            onChange={(e) => handleSeek(parseFloat(e.target.value))}
-            aria-label="Перемотка"
-          />
-
-          <time id="tm">
-            {mm(currentTime)} / {mm(duration)}
-          </time>
+          <div className="player-timeline">
+            <input
+              type="range"
+              min="0"
+              max={duration}
+              step="0.1"
+              value={currentTime}
+              onChange={(e) => handleSeek(parseFloat(e.target.value))}
+              aria-label="Перемотка"
+              aria-valuetext={`${mm(currentTime)} из ${mm(duration)}`}
+              style={{ '--seek-progress': `${(currentTime / duration) * 100}%` } as React.CSSProperties}
+            />
+            <div className="player-times">
+              <span>{mm(currentTime)}</span>
+              <span className="player-times-end">
+                {mm(duration)}
+                {canFullscreen && (
+                  <button className="player-fs" aria-label={isFullscreen ? 'Выйти из полноэкранного режима' : 'Во весь экран'} onClick={toggleFullscreen}>
+                    {isFullscreen ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}
+                  </button>
+                )}
+              </span>
+            </div>
+          </div>
         </div>
+
+        <dialog ref={reviewsRef} className="player-sheet player-reviews" aria-labelledby="player-reviews-title">
+          <div className="player-sheet-heading">
+            <h3 id="player-reviews-title">Отзывы{reviewCount ? ` · ${reviewCount}` : ''}</h3>
+            <button type="button" className="player-icon" aria-label="Закрыть" onClick={() => reviewsRef.current?.close()}>
+              <X aria-hidden="true" size={22} />
+            </button>
+          </div>
+          <CommentsSection karaokeId={karaoke.id} />
+        </dialog>
       </section>
 
       <div className={`ts ${toastMessage ? 'on' : ''}`} id="ts" role="status" aria-live="polite">
@@ -529,8 +633,9 @@ function KaraokePlayerContent() {
 
       <VideoDownloaderModal
         karaoke={karaoke}
-        isOpen={isDownloadOpen}
-        onClose={() => setIsDownloadOpen(false)}
+        isOpen={downloadFormat !== null}
+        initialFormat={downloadFormat ?? 'reel'}
+        onClose={() => setDownloadFormat(null)}
       />
     </>
   );
