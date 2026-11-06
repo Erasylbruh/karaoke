@@ -18,7 +18,7 @@ import {
   loadCustomFont,
   looksLikeFont,
 } from '@/lib/fonts';
-import { alignmentProvider } from '@/lib/alignment';
+import { alignLyrics, isAlignerOnline } from '@/lib/alignment';
 import VideoDownloaderModal from '@/components/karaoke/VideoDownloaderModal';
 import Tutorial from '@/components/ui/Tutorial';
 
@@ -125,6 +125,10 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const [toast, setToast] = useState<string | null>(null);
   const [isDownloadOpen, setIsDownloadOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Auto timing: null = not checked yet; confidence per line id after a run.
+  const [alignerOnline, setAlignerOnline] = useState<boolean | null>(null);
+  const [aligning, setAligning] = useState(false);
+  const [lineConfidence, setLineConfidence] = useState<Record<string, number>>({});
 
   const audioEl = useRef<HTMLAudioElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
@@ -246,6 +250,40 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
         return line;
       });
     });
+  };
+
+  // Check for the local aligner when the timing step opens.
+  useEffect(() => {
+    if (step !== 1) return;
+    let alive = true;
+    void isAlignerOnline().then((ok) => alive && setAlignerOnline(ok));
+    return () => {
+      alive = false;
+    };
+  }, [step]);
+
+  const runAutoTiming = async () => {
+    if (!audioUrl || lines.length === 0) return showToast('Нужны аудио и текст песни');
+    const online = await isAlignerOnline();
+    setAlignerOnline(online);
+    if (!online) return showToast('Сервис авто-тайминга не запущен (aligner/README.md)');
+    if (lines.some((l) => l.time > 0) && !window.confirm('Заменить текущие тайминги автоматическими?')) return;
+    setAligning(true);
+    try {
+      const blob = await (await fetch(audioUrl)).blob();
+      const res = await alignLyrics(blob, audioName, lines.map((l) => l.text));
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      setLines((prev) => prev.map((l, i) => (res.lines[i] ? { ...l, time: r2(res.lines[i].time), end: r2(res.lines[i].end) } : l)));
+      setLineConfidence(Object.fromEntries(lines.map((l, i) => [l.id, res.lines[i]?.confidence ?? 0])));
+      const weak = res.lines.filter((l) => l.confidence < 0.5).length;
+      showToast(
+        `Готово за ${Math.round(res.elapsedMs / 1000)} с.` + (weak ? ` Проверьте строки с пометкой «?»: ${weak}` : ' Все строки распознаны')
+      );
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Авто-тайминг не удался');
+    } finally {
+      setAligning(false);
+    }
   };
 
   const patchLine = (i: number, patch: Partial<Line>) =>
@@ -649,11 +687,18 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                     <button className="bt sm gh" onClick={() => onTextChange(SAMPLE_TEXT)}>Вставить пример</button>
                     <button
                       className="bt sm"
-                      disabled={!alignmentProvider}
-                      title="Автоматическая разметка появится после запуска сайта на хостинге"
+                      onClick={runAutoTiming}
+                      disabled={aligning || !audioUrl || lines.length === 0}
+                      aria-busy={aligning}
+                      title={
+                        alignerOnline === false
+                          ? 'Сервис авто-тайминга не запущен на компьютере'
+                          : 'Расставить тайминги по аудио автоматически'
+                      }
                     >
-                      Авто-тайминг (скоро)
+                      {aligning ? 'Расставляю… (до минуты)' : 'Авто-тайминг'}
                     </button>
+                    {alignerOnline === false && <span className="mu sm">сервис не запущен</span>}
                   </div>
                 </div>
 
@@ -668,7 +713,13 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                     </div>
                     {lines.map((l, i) => (
                       <div key={l.id} className={`trow ${i === activeIdx && audioTime !== null ? 'cur' : ''}`}>
-                        <span className="num">{i + 1}</span>
+                        <span
+                          className="num"
+                          title={lineConfidence[l.id] !== undefined && lineConfidence[l.id] < 0.5 ? 'Строка плохо распознана — проверьте тайминг' : undefined}
+                          style={lineConfidence[l.id] !== undefined && lineConfidence[l.id] < 0.5 ? { color: '#f87171', fontWeight: 700 } : undefined}
+                        >
+                          {lineConfidence[l.id] !== undefined && lineConfidence[l.id] < 0.5 ? '?' : i + 1}
+                        </span>
                         <input className="in" type="text" value={l.text} onChange={(e) => patchLine(i, { text: e.target.value })} aria-label={`Текст строки ${i + 1}`} />
                         <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
                           <input className="in" type="number" step="0.1" min="0" value={l.time} onChange={(e) => patchLine(i, { time: round1(parseFloat(e.target.value) || 0) })} aria-label={`Начало строки ${i + 1}`} />

@@ -231,6 +231,9 @@ export function getDailyStats(authorId: string, type: StatType, days = 30): { da
   return out;
 }
 
+/** Share of the track that must actually be heard (seeking forward does not count) for a listen. */
+export const LISTEN_SHARE = 0.45;
+
 export function registerListen(karaokeId: string, actorId: string) {
   const k = K.get(karaokeId);
   if (!k || k.authorId === actorId) return;

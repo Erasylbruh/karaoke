@@ -13,6 +13,34 @@ import { Karaoke } from '@/lib/types';
 import { synthPlayer } from '@/lib/audio-synthesizer';
 import { resolveBlobUrl } from '@/lib/blob-store';
 import fixWebmDuration from 'fix-webm-duration';
+import { fontCss } from '@/lib/fonts';
+
+/** Space between lyric lines in the video, as a share of the font size. */
+const LINE_GAP_EM = 0.05;
+
+/** Splits a lyric line into rows that fit `maxW` (uses the context's current font). */
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const words = text.split(/s+/).filter(Boolean);
+  const rows: string[] = [];
+  let row = '';
+  for (const w of words) {
+    const next = row ? row + ' ' + w : w;
+    if (row && ctx.measureText(next).width > maxW) {
+      rows.push(row);
+      row = w;
+    } else row = next;
+  }
+  if (row) rows.push(row);
+  return rows.length ? rows : [''];
+}
+
+/** Shortens text with an ellipsis so it fits on one row. */
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
+}
 
 const FPS = 30;
 
@@ -89,100 +117,154 @@ export default function VideoDownloaderModal({
   const width = aspectRatio === 'reel' ? 720 : 1280;
   const height = aspectRatio === 'reel' ? 1280 : 720;
 
-  const drawFrame = (ctx: CanvasRenderingContext2D, elapsedSec: number) => {
+  const drawFrame = (ctx: CanvasRenderingContext2D, elapsedSec: number, totalSec = karaoke.duration || 40) => {
+    const reel = aspectRatio === 'reel';
+    const unit = Math.min(width, height) / 100;
+    const ac = karaoke.style?.activeColor || '#ffb547';
+    const tx = karaoke.style?.textColor || '#f4f4f5';
+    const font = fontCss(karaoke.style?.font || 'Onest');
+    const padX = reel ? width * 0.09 : width * 0.1;
+    const maxW = width - padX * 2;
+
     ctx.clearRect(0, 0, width, height);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
 
-    // 1. Background color from track
-    const bgColor = karaoke.style?.backgroundColor || '#1d1b3a';
-    ctx.fillStyle = bgColor;
+    // 1. Background color from track + soft dark gradient
+    ctx.fillStyle = karaoke.style?.backgroundColor || '#1d1b3a';
     ctx.fillRect(0, 0, width, height);
-
-    // Subtle dark gradient overlay
     const grad = ctx.createLinearGradient(0, 0, 0, height);
     grad.addColorStop(0, 'rgba(0,0,0,0.2)');
     grad.addColorStop(1, 'rgba(0,0,0,0.6)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, width, height);
 
-    // 2. Song Header
+    // 2. Header, left-aligned: title, artist and the watermark right under them.
+    const headTop = reel ? unit * 16 : unit * 12;
     ctx.fillStyle = '#f4f4f5';
-    ctx.font = `700 ${aspectRatio === 'reel' ? 36 : 28}px "Unbounded", "Onest", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.fillText(karaoke.title, width / 2, aspectRatio === 'reel' ? 120 : 70);
-
+    ctx.font = `700 ${reel ? 36 : 28}px "Unbounded", "Onest", sans-serif`;
+    ctx.fillText(fitText(ctx, karaoke.title, maxW), padX, headTop);
     ctx.fillStyle = '#a1a1aa';
-    ctx.font = `500 ${aspectRatio === 'reel' ? 22 : 18}px "Onest", sans-serif`;
-    ctx.fillText(karaoke.artist, width / 2, aspectRatio === 'reel' ? 165 : 100);
+    ctx.font = `500 ${reel ? 22 : 18}px "Onest", sans-serif`;
+    ctx.fillText(fitText(ctx, karaoke.artist, maxW), padX, headTop + (reel ? 40 : 32));
 
-    // 3. Synced Lyrics
-    const activeIdx = karaoke.lyrics.reduce((acc, line, idx) => {
-      return elapsedSec >= line.time ? idx : acc;
-    }, -1);
-
-    const textY = karaoke.style?.textY;
-    const centerY =
-      typeof textY === 'number' ? (height * textY) / 100 : aspectRatio === 'reel' ? height / 2 : height / 2 + 30;
-    const lineHeight = aspectRatio === 'reel' ? 76 : 60;
-
-    karaoke.lyrics.forEach((line, idx) => {
-      const distance = idx - activeIdx;
-      const y = centerY + distance * lineHeight;
-
-      if (y > 200 && y < height - 180) {
-        const isActive = idx === activeIdx;
-
-        if (isActive) {
-          ctx.fillStyle = karaoke.style?.activeColor || '#ffb547';
-          ctx.font = `700 ${aspectRatio === 'reel' ? 42 : 34}px "Onest", sans-serif`;
-        } else {
-          ctx.fillStyle = 'rgba(244, 244, 245, 0.35)';
-          ctx.font = `600 ${aspectRatio === 'reel' ? 32 : 26}px "Onest", sans-serif`;
-        }
-
-        ctx.textAlign = 'center';
-        ctx.fillText(line.text, width / 2, y);
-      }
-    });
-
-    // 4. Progress bar line at bottom
-    const progressPercent = Math.min(1, elapsedSec / (karaoke.duration || 40));
-    const barWidth = width * 0.7;
-    const barX = (width - barWidth) / 2;
-    const barY = height - 100;
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-    ctx.beginPath();
-    ctx.roundRect(barX, barY, barWidth, 4, 2);
-    ctx.fill();
-
-    ctx.fillStyle = karaoke.style?.activeColor || '#ffb547';
-    ctx.beginPath();
-    ctx.roundRect(barX, barY, barWidth * progressPercent, 4, 2);
-    ctx.fill();
-
-    // 5. MANDATORY WATERMARK: small logo + wordmark in the lower-left corner.
-    // Lower-left stays clear of the centred title and progress bar, and in vertical video it sits
-    // above the area that Reels / Shorts / TikTok cover with their own controls.
-    const unit = Math.min(width, height) / 100;
-    const wmX = unit * 6;
-    const wmBaseY = aspectRatio === 'reel' ? height - unit * 14 : height - unit * 7;
-    const barW = unit * 1.1;
-    const barH = [unit * 3, unit * 5, unit * 4];
-
+    // Watermark: small logo bars + wordmark. It is part of the header, so it can't be cropped
+    // away without also cutting the title.
+    const wmBaseY = headTop + (reel ? 84 : 66);
+    const barW = unit * 0.9;
     ctx.save();
-    ctx.globalAlpha = 0.65;
-    ctx.fillStyle = karaoke.style?.activeColor || '#ffb547';
-    barH.forEach((h, i) => {
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = ac;
+    [unit * 2.4, unit * 3.8, unit * 3].forEach((h, i) => {
       ctx.beginPath();
-      ctx.roundRect(wmX + i * barW * 1.5, wmBaseY - h, barW, h, barW / 2);
+      ctx.roundRect(padX + i * barW * 1.6, wmBaseY - h, barW, h, barW / 2);
       ctx.fill();
     });
     ctx.fillStyle = '#f4f4f5';
-    ctx.font = `600 ${unit * 2.8}px "Onest", sans-serif`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText('KaraokeCraft', wmX + barW * 4.6, wmBaseY - unit * 0.4);
+    ctx.font = `600 ${unit * 2.4}px "Onest", sans-serif`;
+    ctx.fillText('KaraokeCraft', padX + barW * 5, wmBaseY - unit * 0.2);
     ctx.restore();
+
+    // 3. Synced lyrics, styled like the player: left-aligned, one size, wrapped lines,
+    // the current line fills left to right in the accent colour.
+    const lyrics = karaoke.lyrics;
+    const fontSize = reel ? 46 : 40;
+    const rowH = fontSize * 1.15;
+    const gap = fontSize * LINE_GAP_EM;
+    ctx.font = `700 ${fontSize}px ${font}`;
+
+    const blocks = lyrics.map((l) => {
+      const rows = wrapText(ctx, l.text, maxW);
+      return { rows, widths: rows.map((r) => ctx.measureText(r).width) };
+    });
+    const tops: number[] = [];
+    let acc = 0;
+    blocks.forEach((b) => {
+      tops.push(acc);
+      acc += b.rows.length * rowH + gap;
+    });
+
+    const activeIdx = lyrics.reduce((a, line, idx) => (elapsedSec >= line.time ? idx : a), -1);
+
+    // Smooth scroll: glide from the previous line to the active one over 0.35 s.
+    const SCROLL = 0.35;
+    let offset = 0;
+    if (activeIdx >= 0) {
+      const from = activeIdx > 0 ? tops[activeIdx - 1] : tops[0] - rowH - gap;
+      const k = Math.min(1, (elapsedSec - lyrics[activeIdx].time) / SCROLL);
+      const ease = 1 - Math.pow(1 - k, 3);
+      offset = from + (tops[activeIdx] - from) * ease;
+    } else {
+      offset = tops[0] - rowH - gap;
+    }
+
+    const textY = karaoke.style?.textY;
+    const anchorY = typeof textY === 'number' ? (height * textY) / 100 : reel ? height * 0.48 : height * 0.52;
+    const minY = wmBaseY + unit * 6;
+    const maxY = height - (reel ? unit * 26 : unit * 14);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, minY - fontSize, width, maxY - minY + fontSize);
+    ctx.clip();
+    blocks.forEach((b, idx) => {
+      const top = anchorY + tops[idx] - offset;
+      const bottom = top + b.rows.length * rowH;
+      if (bottom < minY - fontSize || top > maxY + fontSize) return;
+
+      // Fill progress of this line (0..1), same rule as in the browser player.
+      let p = 0;
+      let alpha = 0.3;
+      if (idx < activeIdx) {
+        p = 1;
+        alpha = 0.85;
+      } else if (idx === activeIdx) {
+        const line = lyrics[idx];
+        const end = line.end ?? lyrics[idx + 1]?.time ?? totalSec;
+        p = Math.min(1, Math.max(0, (elapsedSec - line.time) / Math.max(0.1, end - line.time)));
+        alpha = 1;
+      }
+      // Fade lines out near the top and bottom edges, like the player's mask.
+      const mid = top + rowH / 2;
+      const edge = Math.min(mid - minY, maxY - mid) / (rowH * 1.5);
+      ctx.globalAlpha = alpha * Math.max(0, Math.min(1, edge + 0.35));
+
+      const total = b.widths.reduce((s, w) => s + w, 0) || 1;
+      let filled = p * total;
+      b.rows.forEach((row, r) => {
+        const y = top + r * rowH + fontSize * 0.9;
+        const w = b.widths[r];
+        const fillW = Math.max(0, Math.min(w, filled));
+        filled -= w;
+        if (fillW < w) {
+          ctx.fillStyle = tx;
+          ctx.fillText(row, padX, y);
+        }
+        if (fillW > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(padX - 4, y - fontSize * 1.2, fillW + 4, fontSize * 1.6);
+          ctx.clip();
+          ctx.fillStyle = ac;
+          ctx.fillText(row, padX, y);
+          ctx.restore();
+        }
+      });
+    });
+    ctx.restore();
+    ctx.globalAlpha = 1;
+
+    // 4. Progress bar at the bottom
+    const progressPercent = Math.min(1, elapsedSec / totalSec);
+    const barY = height - (reel ? unit * 18 : unit * 8);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.beginPath();
+    ctx.roundRect(padX, barY, maxW, 4, 2);
+    ctx.fill();
+    ctx.fillStyle = ac;
+    ctx.beginPath();
+    ctx.roundRect(padX, barY, maxW * progressPercent, 4, 2);
+    ctx.fill();
   };
 
   const handleStartRecord = async () => {
@@ -283,11 +365,13 @@ export default function VideoDownloaderModal({
     const startTime = performance.now();
     let lastProgress = 0;
 
-    drawFrame(ctx, 0);
+    // Make sure the project's font is ready, otherwise the first frames use a fallback font.
+    await document.fonts.load(`700 40px ${fontCss(karaoke.style?.font || 'Onest')}`).catch(() => undefined);
+    drawFrame(ctx, 0, recordDuration);
     stopTickerRef.current = startTicker(() => {
       const now = performance.now();
       const elapsed = trackAudio ? trackAudio.currentTime : (now - startTime) / 1000;
-      drawFrame(ctx, elapsed);
+      drawFrame(ctx, elapsed, recordDuration);
       if (now - lastProgress > 250) {
         lastProgress = now;
         setProgress(Math.min(100, (elapsed / recordDuration) * 100));
@@ -427,7 +511,7 @@ export default function VideoDownloaderModal({
         >
           <ShieldCheck style={{ width: '18px', height: '18px', color: 'var(--ac)', flexShrink: 0 }} />
           <span>
-            Видео сохраняются с водяным знаком <strong style={{ color: 'var(--tx)' }}>«KaraokeCraft»</strong> в левом нижнем углу кадра.
+            Видео сохраняются с водяным знаком <strong style={{ color: 'var(--tx)' }}>«KaraokeCraft»</strong> под названием и исполнителем.
           </span>
         </div>
 

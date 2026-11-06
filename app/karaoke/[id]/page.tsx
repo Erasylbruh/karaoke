@@ -13,6 +13,7 @@ import {
   incrementViewCount,
   registerInteraction,
   registerListen,
+  LISTEN_SHARE,
   registerGuestPlay,
   guestPlaysLeft,
   getGuestId,
@@ -135,6 +136,9 @@ function KaraokePlayerContent() {
   const activeLineIndexRef = useRef<number>(-2);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const finishedRef = useRef(false);
+  // Seconds actually played in this run (seeking doesn't add time) and whether the listen was counted.
+  const heardRef = useRef(0);
+  const listenCountedRef = useRef(false);
 
   const hasAudio = !!audioSrc;
   const actorId = user?.id ?? (typeof window !== 'undefined' ? getGuestId() : 'guest');
@@ -168,6 +172,8 @@ function KaraokePlayerContent() {
     ensureStyleFont(item.style);
     resolveBlobUrl(item.audioUrl).then(setAudioSrc);
     incrementViewCount(item.id);
+    heardRef.current = 0;
+    listenCountedRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user?.id]);
 
@@ -206,6 +212,9 @@ function KaraokePlayerContent() {
       if (next >= duration) {
         setIsPlaying(false);
         setTime(0);
+        // Played to the end: the next run is a new listen.
+        heardRef.current = 0;
+        listenCountedRef.current = false;
         if (!finishedRef.current) {
           finishedRef.current = true;
           registerInteraction(karaoke.id, actorId, 'finish');
@@ -213,6 +222,13 @@ function KaraokePlayerContent() {
         return;
       }
       setTime(next);
+      // A listen counts once the person has really heard LISTEN_SHARE of the track.
+      heardRef.current += Math.min(dt, 0.5);
+      if (!listenCountedRef.current && heardRef.current >= duration * LISTEN_SHARE) {
+        listenCountedRef.current = true;
+        registerInteraction(karaoke.id, actorId, 'listen');
+        registerListen(karaoke.id, actorId);
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -312,8 +328,6 @@ function KaraokePlayerContent() {
 
   const startPlayback = () => {
     if (!canStartPlayback() || !karaoke) return false;
-    registerInteraction(karaoke.id, actorId, 'listen');
-    registerListen(karaoke.id, actorId);
     finishedRef.current = false;
     setIsPlaying(true);
     return true;
@@ -354,8 +368,6 @@ function KaraokePlayerContent() {
     if (!isPlaying && !canStartPlayback()) return;
     handleSeek(time + 0.01);
     if (!isPlaying && karaoke) {
-      registerInteraction(karaoke.id, actorId, 'listen');
-    registerListen(karaoke.id, actorId);
       finishedRef.current = false;
       setIsPlaying(true);
     }
