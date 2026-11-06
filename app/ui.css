@@ -531,3 +531,7 @@ a.dlp-title:hover { color: var(--ac); }
 @media (max-width: 600px) {
   .dlp[open] { width: 100vw; border-left: 0; }
 }
+
+/* Audio upload progress in the editor */
+.up-bar { display: block; width: min(320px, 100%); height: 6px; border-radius: 3px; background: var(--ln); overflow: hidden; margin-top: 10px; }
+.up-bar i { display: block; height: 100%; background: var(--ac); border-radius: 3px; transition: width .2s; }

@@ -15,21 +15,30 @@ const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishabl
 const BUCKET = process.env.NEXT_PUBLIC_SUPABASE_BUCKET || 'uploads';
 export const supabaseConfigured = !!SUPABASE_URL && !!SUPABASE_KEY;
 
-/** Uploads through the Storage REST API and returns the public URL. */
-async function uploadToSupabase(file: Blob, path: string): Promise<string> {
-  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {
-    method: 'POST',
-    headers: {
-      apikey: SUPABASE_KEY,
-      // New-style keys (sb_publishable_…) are not JWTs and go in `apikey` only; legacy anon keys also need the Bearer header.
-      ...(SUPABASE_KEY.startsWith('sb_') ? {} : { Authorization: `Bearer ${SUPABASE_KEY}` }),
-      'Content-Type': file.type || 'application/octet-stream',
-      'x-upsert': 'false',
-    },
-    body: file,
+/** Upload progress callback: share of the file sent, 0..1. */
+export type UploadProgress = (share: number) => void;
+
+/**
+ * Uploads through the Storage REST API and returns the public URL.
+ * XMLHttpRequest instead of fetch, because only it reports upload progress.
+ */
+function uploadToSupabase(file: Blob, path: string, onProgress?: UploadProgress): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`);
+    xhr.setRequestHeader('apikey', SUPABASE_KEY);
+    // New-style keys (sb_publishable_…) are not JWTs and go in `apikey` only; legacy anon keys also need the Bearer header.
+    if (!SUPABASE_KEY.startsWith('sb_')) xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_KEY}`);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('x-upsert', 'false');
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve(`${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`)
+        : reject(new Error(`Supabase ${xhr.status}: ${xhr.responseText.slice(0, 200)}`));
+    xhr.onerror = () => reject(new Error('Сеть недоступна'));
+    xhr.send(file);
   });
-  if (!res.ok) throw new Error(`Supabase ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
 }
 
 const DB_NAME = 'karaokecraft_blobs';
@@ -51,11 +60,11 @@ export function isBlobRef(ref?: string): ref is string {
   return !!ref && ref.startsWith(PREFIX);
 }
 
-export async function putBlob(file: Blob, folder = 'uploads'): Promise<string> {
+export async function putBlob(file: Blob, folder = 'uploads', onProgress?: UploadProgress): Promise<string> {
   const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   if (supabaseConfigured) {
     try {
-      return await uploadToSupabase(file, `${folder}/${auth.currentUser?.uid ?? 'anon'}/${name}`);
+      return await uploadToSupabase(file, `${folder}/${auth.currentUser?.uid ?? 'anon'}/${name}`, onProgress);
     } catch (e) {
       console.warn('[storage] upload failed, keeping the file in this browser only:', e);
     }

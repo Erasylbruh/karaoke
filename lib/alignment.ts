@@ -1,10 +1,16 @@
 /**
- * Automatic line timing through the local Rust "aligner" service (see aligner/README.md).
+ * Automatic line timing through the Rust "aligner" service (see aligner/README.md).
  *
  * The service runs Whisper on the author's computer and matches the recognised words to the
  * lyrics the author typed, so it returns the start and end of every line.
- * Address: NEXT_PUBLIC_ALIGNER_URL, by default http://localhost:8787 (the author's own PC).
+ *
+ * Where it is: NEXT_PUBLIC_ALIGNER_URL if set; otherwise the public tunnel address the running
+ * aligner publishes to Firestore (config/aligner), so phones and other computers can use it;
+ * otherwise http://localhost:8787 (the same computer).
  */
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+
 export interface AlignedLine {
   time: number;
   end: number;
@@ -19,10 +25,30 @@ export interface AlignmentResult {
   elapsedMs: number;
 }
 
-export const ALIGNER_URL = (process.env.NEXT_PUBLIC_ALIGNER_URL || 'http://localhost:8787').replace(/\/$/, '');
+const FIXED_URL = (process.env.NEXT_PUBLIC_ALIGNER_URL || '').replace(/\/$/, '');
+const LOCAL_URL = 'http://localhost:8787';
+/** The aligner refreshes its address every minute; older than this means it is switched off. */
+const STALE_MS = 3 * 60 * 1000;
 
-/** The service runs on this computer (as opposed to a tunnel URL on the internet). */
-const IS_LOOPBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(ALIGNER_URL);
+let cached: { url: string; at: number } | null = null;
+
+/** Current address of the aligner (see the comment at the top of the file). */
+export async function getAlignerUrl(): Promise<string> {
+  if (FIXED_URL) return FIXED_URL;
+  if (cached && Date.now() - cached.at < 20_000) return cached.url;
+  let url = LOCAL_URL;
+  try {
+    const snap = await getDoc(doc(db, 'config', 'aligner'));
+    const d = snap.data() as { url?: string; updatedAt?: number } | undefined;
+    if (d?.url && d.updatedAt && Date.now() - Number(d.updatedAt) < STALE_MS) url = d.url.replace(/\/$/, '');
+  } catch {
+    // offline or no access: try this computer
+  }
+  cached = { url, at: Date.now() };
+  return url;
+}
+
+const isLoopback = (url: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(url);
 
 /**
  * Chrome (142+) asks the user before a site from the internet may call localhost
@@ -30,7 +56,7 @@ const IS_LOOPBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(
  * has no such permission (then the request simply goes through).
  */
 export async function localAccessState(): Promise<'granted' | 'denied' | 'prompt' | 'unknown'> {
-  if (!IS_LOOPBACK || typeof window === 'undefined') return 'granted';
+  if (typeof window === 'undefined' || !isLoopback(await getAlignerUrl())) return 'granted';
   if (['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)) return 'granted';
   for (const name of ['local-network-access', 'loopback-network']) {
     try {
@@ -51,7 +77,7 @@ export const LOCAL_ACCESS_HINT =
  */
 export async function isAlignerOnline(timeoutMs = 2000): Promise<boolean> {
   try {
-    const res = await fetch(`${ALIGNER_URL}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetch(`${await getAlignerUrl()}/health`, { signal: AbortSignal.timeout(timeoutMs) });
     return res.ok;
   } catch {
     return false;
@@ -72,7 +98,7 @@ export async function alignLyrics(audio: Blob, fileName: string, lines: string[]
   form.append('language', guessLanguage(lines.join(' ')));
   let res: Response;
   try {
-    res = await fetch(`${ALIGNER_URL}/align`, { method: 'POST', body: form });
+    res = await fetch(`${await getAlignerUrl()}/align`, { method: 'POST', body: form });
   } catch {
     throw new Error('Сервис авто-тайминга не отвечает. Запустите aligner на компьютере.');
   }

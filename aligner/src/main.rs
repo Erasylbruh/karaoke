@@ -7,10 +7,13 @@
 //!   WHISPER_MODEL    path to a ggml model        (default: models/ggml-small.bin)
 //!   ALIGNER_PORT     port on 127.0.0.1            (default: 8787)
 //!   ALIGNER_ORIGINS  allowed site origins, comma-separated
+//!   ALIGNER_PUBLIC   0 = only this computer; otherwise a Cloudflare tunnel makes the service
+//!                    reachable from other devices and its address is published to Firestore
 
 mod align;
 mod audio;
 mod transcribe;
+mod tunnel;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -109,7 +112,32 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     tracing::info!("aligner ready on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+
+    // Public access through a tunnel, so the phone or another computer can use this PC.
+    let http = reqwest::Client::new();
+    let mut tunnel_child = None;
+    if std::env::var("ALIGNER_PUBLIC").map(|v| v != "0").unwrap_or(true) {
+        match tunnel::start(port).await {
+            Ok((child, url)) => {
+                tracing::info!("public address: {url} (other devices find it automatically)");
+                tunnel_child = Some(child);
+                tokio::spawn(tunnel::heartbeat(http.clone(), url));
+            }
+            Err(e) => tracing::warn!("no public access, this computer only: {e:#}"),
+        }
+    }
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
+
+    // Tell the site the server is gone, so other devices stop waiting for it.
+    if tunnel_child.is_some() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), tunnel::publish(&http, "")).await;
+    }
+    drop(tunnel_child);
     Ok(())
 }
 

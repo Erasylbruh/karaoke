@@ -125,6 +125,8 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const [toast, setToast] = useState<string | null>(null);
   const { startDownload } = useDownloads();
   const [busy, setBusy] = useState(false);
+  // Share of the audio file sent to the cloud (0..1) while it uploads.
+  const [uploadShare, setUploadShare] = useState<number | null>(null);
   // Auto timing: null = not checked yet; confidence per line id after a run.
   const [alignerOnline, setAlignerOnline] = useState<boolean | null>(null);
   const [aligning, setAligning] = useState(false);
@@ -210,8 +212,9 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       return;
     }
     setBusy(true);
+    setUploadShare(0);
     try {
-      const ref = await putBlob(file);
+      const ref = await putBlob(file, 'audio', setUploadShare);
       if (isBlobRef(ref)) showToast('Не удалось загрузить песню в облако: пока она будет слышна только в этом браузере');
       setAudioRef(ref);
       setAudioUrl(URL.createObjectURL(file));
@@ -222,6 +225,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       showToast('Не удалось сохранить файл. Проверьте свободное место в браузере');
     } finally {
       setBusy(false);
+      setUploadShare(null);
     }
   };
 
@@ -610,8 +614,25 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                 <div className="card stack">
                   <b>1. Загрузите аудио</b>
                   <label className="bt" style={{ cursor: 'pointer', padding: '28px 16px', borderStyle: 'dashed', flexDirection: 'column' }}>
-                    {busy ? 'Загрузка…' : audioName ? `Выбрано: ${audioName}` : 'Выберите файл (mp3, wav, ogg, m4a)'}
-                    <span className="mu sm">до 40 МБ</span>
+                    {busy
+                      ? `Загрузка в облако… ${Math.round((uploadShare ?? 0) * 100)}%`
+                      : audioName
+                        ? `Выбрано: ${audioName}`
+                        : 'Выберите файл (mp3, wav, ogg, m4a)'}
+                    {busy ? (
+                      <span
+                        className="up-bar"
+                        role="progressbar"
+                        aria-label="Загрузка аудио"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={Math.round((uploadShare ?? 0) * 100)}
+                      >
+                        <i style={{ width: `${Math.round((uploadShare ?? 0) * 100)}%` }} />
+                      </span>
+                    ) : (
+                      <span className="mu sm">до 40 МБ</span>
+                    )}
                     <input type="file" hidden accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" onChange={(e) => handleAudio(e.target.files?.[0])} />
                   </label>
                   {!hasAudio && (
