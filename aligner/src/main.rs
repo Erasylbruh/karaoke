@@ -24,14 +24,14 @@ use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::Semaphore;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use whisper_rs::{DtwMode, DtwModelPreset, DtwParameters, WhisperContext, WhisperContextParameters};
 
 const MAX_UPLOAD: usize = 60 * 1024 * 1024;
 const MAX_SECONDS: f32 = 15.0 * 60.0;
 const MAX_LINES: usize = 1000;
-const DEFAULT_ORIGINS: &str =
-    "http://localhost:3000,http://localhost:3005,https://karaoke-six-dusky.vercel.app";
+/// Site addresses allowed to call the service (plus any localhost port, see `origin_allowed`).
+const DEFAULT_ORIGINS: &str = "https://karaokecraft.vercel.app,https://karaoke-six-dusky.vercel.app";
 
 struct AppState {
     ctx: WhisperContext,
@@ -83,13 +83,16 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("cannot load model: {e:?}"))?;
     let state = Arc::new(AppState { ctx, model, busy: Semaphore::new(1) });
 
-    let origins: Vec<HeaderValue> = std::env::var("ALIGNER_ORIGINS")
-        .unwrap_or_else(|_| DEFAULT_ORIGINS.into())
-        .split(',')
-        .filter_map(|o| HeaderValue::from_str(o.trim().trim_end_matches('/')).ok())
-        .collect();
+    // ALIGNER_ORIGINS adds to the defaults, so a new domain doesn't silently drop the old ones.
+    let mut origins: Vec<String> = DEFAULT_ORIGINS.split(',').map(String::from).collect();
+    if let Ok(extra) = std::env::var("ALIGNER_ORIGINS") {
+        origins.extend(extra.split(',').map(|o| o.trim().trim_end_matches('/').to_string()).filter(|o| !o.is_empty()));
+    }
+    tracing::info!("allowed sites: {} and localhost", origins.join(", "));
     let cors = CorsLayer::new()
-        .allow_origin(origins)
+        .allow_origin(AllowOrigin::predicate(move |origin: &HeaderValue, _| {
+            origin.to_str().map(|o| origin_allowed(o, &origins)).unwrap_or(false)
+        }))
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE])
         // Lets an https site call this service on localhost (Chrome "private network access").
@@ -108,6 +111,16 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Exact match with an allowed site, or the site running locally on any port.
+fn origin_allowed(origin: &str, allowed: &[String]) -> bool {
+    if allowed.iter().any(|a| a == origin) {
+        return true;
+    }
+    let host = origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")).unwrap_or("");
+    let host = host.rsplit_once(':').map(|(h, port)| if port.chars().all(|c| c.is_ascii_digit()) { h } else { host }).unwrap_or(host);
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 /// DTW alignment heads must match the model, so pick the preset from the file name.
@@ -218,5 +231,21 @@ async fn align_handler(State(st): State<Arc<AppState>>, mut form: Multipart) -> 
             Ok(Json(r))
         }
         Err(e) => Err(ApiError(StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::origin_allowed;
+
+    #[test]
+    fn origins() {
+        let allowed = vec!["https://karaokecraft.vercel.app".to_string()];
+        assert!(origin_allowed("https://karaokecraft.vercel.app", &allowed));
+        assert!(origin_allowed("http://localhost:3005", &allowed));
+        assert!(origin_allowed("http://127.0.0.1:3000", &allowed));
+        assert!(!origin_allowed("https://evil.example", &allowed));
+        assert!(!origin_allowed("https://localhost.evil.example", &allowed));
+        assert!(!origin_allowed("https://karaokecraft.vercel.app.evil.example", &allowed));
     }
 }

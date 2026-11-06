@@ -38,7 +38,7 @@ cargo test --release   # проверки сопоставления и деко
 |---|---|---|
 | `WHISPER_MODEL` | `models/ggml-small.bin` | Модель. `ggml-medium.bin` точнее, но в 2–3 раза медленнее |
 | `ALIGNER_PORT` | `8787` | Порт (сервис слушает только `127.0.0.1`) |
-| `ALIGNER_ORIGINS` | localhost:3000, localhost:3005, karaoke-six-dusky.vercel.app | С каких сайтов разрешены запросы |
+| `ALIGNER_ORIGINS` | — | Дополнительные адреса сайта через запятую. Всегда разрешены karaokecraft.vercel.app, karaoke-six-dusky.vercel.app и localhost на любом порту |
 | `ALIGNER_DEBUG` | — | Печатать каждое распознанное слово и время работы |
 
 ## Чтобы авто-тайминг работал у других авторов
