@@ -24,10 +24,11 @@ import {
   getPlaylists,
   getComments,
   GUEST_PLAY_LIMIT,
+  updateKaraoke,
 } from '@/lib/storage';
 import { useAuth } from '@/context/AuthContext';
 import { synthPlayer } from '@/lib/audio-synthesizer';
-import { resolveBlobUrl } from '@/lib/blob-store';
+import { isBlobRef, resolveBlobUrl, uploadLocalBlob } from '@/lib/blob-store';
 import { ensureStyleFont, fontCss } from '@/lib/fonts';
 import { useDownloads } from '@/context/DownloadsContext';
 import type { ExportFormat } from '@/lib/video-render';
@@ -287,6 +288,32 @@ function KaraokePlayerContent() {
       if (span) (span as HTMLElement).style.setProperty('--w', `${progress}%`);
     }
   }, [currentTime, karaoke, duration]);
+
+  // Files saved before cloud uploads worked live only in the author's browser (`idb:` refs), so
+  // other people hear the demo tune. When the author opens the track here, move them to the cloud.
+  useEffect(() => {
+    if (!karaoke || !user || user.id !== karaoke.authorId) return;
+    const audioLocal = isBlobRef(karaoke.audioUrl);
+    const fontLocal = isBlobRef(karaoke.style?.fontFile);
+    if (!audioLocal && !fontLocal) return;
+    let alive = true;
+    void (async () => {
+      const [audioUrl, fontFile] = await Promise.all([
+        audioLocal ? uploadLocalBlob(karaoke.audioUrl, 'audio') : null,
+        fontLocal ? uploadLocalBlob(karaoke.style?.fontFile, 'fonts') : null,
+      ]);
+      if (!alive || (!audioUrl && !fontFile)) return;
+      updateKaraoke(karaoke.id, {
+        ...(audioUrl ? { audioUrl } : {}),
+        ...(fontFile ? { style: { ...karaoke.style, fontFile } } : {}),
+      });
+      if (audioUrl) showToast('Песня загружена в облако — теперь её слышно на всех устройствах');
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [karaoke?.id, user?.id]);
 
   // A link like /karaoke/{id}#c-{commentId} (from a reply notification) opens the reviews on that comment.
   useEffect(() => {

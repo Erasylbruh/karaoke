@@ -7,8 +7,11 @@
  */
 import { auth } from './firebase';
 
-const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '');
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+// Defaults keep uploads working when the hosting has no env vars set (that is how files ended up
+// only in the author's browser). A publishable key is public by design, like the Firebase config:
+// the bucket's policies decide what it may do (insert + public read only).
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://alspedwglexctjkztcof.supabase.co').replace(/\/+$/, '');
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_jypnDexN-2p-3V48-y2F8Q_Hhciy5lc';
 const BUCKET = process.env.NEXT_PUBLIC_SUPABASE_BUCKET || 'uploads';
 export const supabaseConfigured = !!SUPABASE_URL && !!SUPABASE_KEY;
 
@@ -85,6 +88,24 @@ export async function resolveBlobUrl(ref?: string): Promise<string | null> {
     urlCache.set(ref, url);
     return url;
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Moves a file that only lives in this browser (`idb:` ref) to Supabase and returns the public
+ * URL, or null when there is nothing to move (not a local ref, file not in this browser, or the
+ * upload failed).
+ */
+export async function uploadLocalBlob(ref: string | undefined, folder = 'uploads'): Promise<string | null> {
+  if (!isBlobRef(ref) || !supabaseConfigured) return null;
+  const blob = await getBlob(ref);
+  if (!blob) return null;
+  const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    return await uploadToSupabase(blob, `${folder}/${auth.currentUser?.uid ?? 'anon'}/${name}`);
+  } catch (e) {
+    console.warn('[storage] could not move a local file to Supabase:', e);
     return null;
   }
 }

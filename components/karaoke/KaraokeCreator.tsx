@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Karaoke, LyricLine, Visibility } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
 import { saveKaraoke, updateKaraoke, getKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid } from '@/lib/storage';
-import { putBlob, resolveBlobUrl } from '@/lib/blob-store';
+import { isBlobRef, putBlob, resolveBlobUrl } from '@/lib/blob-store';
 import {
   DEFAULT_FONTS,
   POPULAR_FONTS,
@@ -212,6 +212,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     setBusy(true);
     try {
       const ref = await putBlob(file);
+      if (isBlobRef(ref)) showToast('Не удалось загрузить песню в облако: пока она будет слышна только в этом браузере');
       setAudioRef(ref);
       setAudioUrl(URL.createObjectURL(file));
       setAudioName(file.name);
