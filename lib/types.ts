@@ -156,6 +156,19 @@ export interface AppNotification {
 
 export type StatType = 'listen' | 'follow' | 'download';
 
+/** One finished video download, shown in the downloads panel and in Creator Studio. */
+export interface DownloadRecord {
+  id: string;
+  userId: string;
+  karaokeId: string;
+  title: string;
+  artist: string;
+  format: 'reel' | 'landscape';
+  /** Background colour of the project, for the card when the project has no cover. */
+  color?: string;
+  createdAt: string;
+}
+
 /** Daily counter per author, used for the Creator Studio charts. */
 export interface DailyStat {
   id: string; // `${authorId}_${type}_${day}`

@@ -8,6 +8,8 @@ import Footer from '@/components/layout/Footer';
 import SiteChrome from '@/components/layout/SiteChrome';
 import AuthPrompt from '@/components/ui/AuthPrompt';
 import DataProvider from '@/components/DataProvider';
+import { DownloadsProvider } from '@/context/DownloadsContext';
+import DownloadsPanel from '@/components/downloads/DownloadsPanel';
 
 export const metadata: Metadata = {
   title: 'KaraokeCraft — караоке-анимации',
@@ -36,6 +38,7 @@ export default function RootLayout({
       <body>
         <DataProvider>
         <AuthProvider>
+        <DownloadsProvider>
           <Suspense fallback={null}>
             <SiteChrome><Navbar /></SiteChrome>
           </Suspense>
@@ -48,6 +51,8 @@ export default function RootLayout({
             <SiteChrome><Footer /></SiteChrome>
           </Suspense>
           <AuthPrompt />
+          <DownloadsPanel />
+        </DownloadsProvider>
         </AuthProvider>
         </DataProvider>
       </body>

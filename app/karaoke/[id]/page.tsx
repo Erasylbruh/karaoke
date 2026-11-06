@@ -29,16 +29,17 @@ import { useAuth } from '@/context/AuthContext';
 import { synthPlayer } from '@/lib/audio-synthesizer';
 import { resolveBlobUrl } from '@/lib/blob-store';
 import { ensureStyleFont, fontCss } from '@/lib/fonts';
-import VideoDownloaderModal from '@/components/karaoke/VideoDownloaderModal';
+import { useDownloads } from '@/context/DownloadsContext';
+import type { ExportFormat } from '@/lib/video-render';
 import CommentsSection from '@/components/karaoke/CommentsSection';
 import PlaylistPicker from '@/components/karaoke/PlaylistPicker';
 import Tutorial from '@/components/ui/Tutorial';
 import { useDataVersion } from '@/components/DataProvider';
 
-type ExportFormat = 'reel' | 'landscape';
-
-/** «Скачать ▾»: pick the video format, then the export modal records it with the track's audio. */
-function DownloadMenu({ onPick }: { onPick: (f: ExportFormat) => void }) {
+/** «Скачать ▾»: pick the video format; the video is made in the background (see DownloadsContext). */
+function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat) => void; karaokeId: string }) {
+  const { jobs, openPanel } = useDownloads();
+  const mine = jobs.find((j) => j.karaoke.id === karaokeId && (j.status === 'rendering' || j.status === 'queued'));
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<React.CSSProperties | undefined>(undefined);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -67,7 +68,7 @@ function DownloadMenu({ onPick }: { onPick: (f: ExportFormat) => void }) {
     <div className="dl-menu" ref={ref}>
       <button className="bt" aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
         <Download size={16} aria-hidden="true" />
-        <span className="t">Скачать</span>
+        <span className="t">{mine ? (mine.status === 'queued' ? 'В очереди' : `Видео ${Math.round(mine.progress * 100)}%`) : 'Скачать'}</span>
         <ChevronDown size={14} aria-hidden="true" />
       </button>
       {open && (
@@ -79,6 +80,16 @@ function DownloadMenu({ onPick }: { onPick: (f: ExportFormat) => void }) {
           <button role="menuitem" onClick={() => pick('landscape')}>
             <b>Горизонтальное 16:9</b>
             <span>YouTube, презентации</span>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              openPanel();
+            }}
+          >
+            <b>Мои загрузки</b>
+            <span>Прогресс и история</span>
           </button>
         </div>
       )}
@@ -116,7 +127,7 @@ function KaraokePlayerContent() {
   const [duration, setDuration] = useState(40);
   const [audioSrc, setAudioSrc] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [downloadFormat, setDownloadFormat] = useState<ExportFormat | null>(null);
+  const { startDownload } = useDownloads();
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [following, setFollowing] = useState(false);
   const [isSmall, setIsSmall] = useState(false);
@@ -383,7 +394,7 @@ function KaraokePlayerContent() {
 
   const handleOpenDownload = (format: ExportFormat) => {
     if (!requireAccount('Скачивать видео могут только зарегистрированные пользователи.')) return;
-    setDownloadFormat(format);
+    if (karaoke) startDownload(karaoke, format);
   };
 
   const handleShare = () => {
@@ -483,7 +494,7 @@ function KaraokePlayerContent() {
           </span>
         </button>
 
-        <DownloadMenu onPick={handleOpenDownload} />
+        <DownloadMenu onPick={handleOpenDownload} karaokeId={karaoke.id} />
 
         <button className="bt" aria-pressed={inPlaylist} onClick={handlePlaylist}>
           {inPlaylist ? <ListCheck size={16} aria-hidden="true" /> : <ListPlus size={16} aria-hidden="true" />}
@@ -652,13 +663,6 @@ function KaraokePlayerContent() {
       {showPlaylists && (
         <PlaylistPicker karaokeId={karaoke.id} onClose={() => setShowPlaylists(false)} onChange={showToast} />
       )}
-
-      <VideoDownloaderModal
-        karaoke={karaoke}
-        isOpen={downloadFormat !== null}
-        initialFormat={downloadFormat ?? 'reel'}
-        onClose={() => setDownloadFormat(null)}
-      />
     </>
   );
 }

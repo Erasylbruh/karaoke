@@ -19,7 +19,7 @@ import {
   looksLikeFont,
 } from '@/lib/fonts';
 import { alignLyrics, isAlignerOnline, localAccessState, LOCAL_ACCESS_HINT } from '@/lib/alignment';
-import VideoDownloaderModal from '@/components/karaoke/VideoDownloaderModal';
+import { useDownloads } from '@/context/DownloadsContext';
 import Tutorial from '@/components/ui/Tutorial';
 
 const STEPS = ['Аудио и информация', 'Текст и тайминг', 'Стиль', 'Доступ'] as const;
@@ -123,7 +123,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
 
   const [previewLineIndex, setPreviewLineIndex] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
-  const [isDownloadOpen, setIsDownloadOpen] = useState(false);
+  const { startDownload } = useDownloads();
   const [busy, setBusy] = useState(false);
   // Auto timing: null = not checked yet; confidence per line id after a run.
   const [alignerOnline, setAlignerOnline] = useState<boolean | null>(null);
@@ -839,7 +839,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                   <button className="bt pr" onClick={handlePublish}>
                     {editId ? 'Сохранить изменения' : visibility === 'public' ? 'Опубликовать' : 'Сохранить'}
                   </button>
-                  <button className="bt" onClick={() => setIsDownloadOpen(true)} disabled={finalLines.length === 0}>Скачать видео</button>
+                  <button className="bt" onClick={() => startDownload(previewKaraoke, aspectRatio === 'h' ? 'landscape' : 'reel')} disabled={finalLines.length === 0}>Скачать видео</button>
                 </div>
               </div>
             )}
@@ -918,7 +918,6 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
 
       <div className={`ts ${toast ? 'on' : ''}`} id="ts" role="status" aria-live="polite" style={{ bottom: 24 }}>{toast}</div>
 
-      <VideoDownloaderModal karaoke={previewKaraoke} isOpen={isDownloadOpen} onClose={() => setIsDownloadOpen(false)} />
     </>
   );
 }

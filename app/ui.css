@@ -495,3 +495,39 @@
   .tbl select.in { width: 100% !important; }
   .am-menu { left: 0; right: auto; }
 }
+
+/* Downloads panel (global side drawer, see components/downloads/DownloadsPanel.tsx) */
+.dlp[open] {
+  display: flex; flex-direction: column; gap: 12px;
+  position: fixed; inset: 0 0 0 auto; width: min(420px, 100vw); height: 100dvh; max-height: none; max-width: none;
+  margin: 0 0 0 auto; padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
+  overflow-y: auto; border: 0; border-left: 1px solid #3f3f46; background: #111113; color: #f4f4f5;
+}
+.dlp::backdrop { background: rgba(0, 0, 0, 0.45); }
+.dlp-head { display: flex; justify-content: space-between; align-items: center; }
+.dlp-head h3 { margin: 0; font: 700 18px var(--fd); }
+.dlp-note { margin: 0; color: #a1a1aa; font-size: 13px; line-height: 1.45; }
+.dlp-empty { color: #a1a1aa; font-size: 14px; margin: 24px 0; text-align: center; }
+.dlp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.dlp-card { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px; border: 1px solid #27272a; border-radius: 14px; background: #18181b; }
+.dlp-card.rendering { border-color: color-mix(in srgb, var(--ac) 45%, #27272a); }
+.dlp-card.error { border-color: #7f1d1d; }
+.dlp-cover { width: 52px; height: 52px; border-radius: 10px; object-fit: cover; display: grid; place-items: center; color: rgba(255,255,255,.7); font-size: 20px; }
+.dlp-body { min-width: 0; display: grid; gap: 3px; }
+.dlp-title { font-weight: 700; font-size: 14px; color: #f4f4f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; }
+a.dlp-title:hover { color: var(--ac); }
+.dlp-meta { color: #a1a1aa; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dlp-bar { height: 4px; border-radius: 2px; background: #27272a; overflow: hidden; margin-top: 4px; }
+.dlp-bar i { display: block; height: 100%; background: var(--ac); border-radius: 2px; transition: width .3s; }
+.dlp-status { font-size: 12px; color: #d4d4d8; display: inline-flex; align-items: center; gap: 5px; }
+.dlp-status.ok { color: #4ade80; }
+.dlp-status.err { color: #f87171; white-space: normal; }
+.dlp-act { display: flex; gap: 4px; }
+.dlp-all { align-self: flex-start; margin-top: 4px; }
+.dlp-btn { position: relative; }
+.dlp-btn .nb-dot { min-width: 30px; font-size: 10px; }
+.spin { animation: dlp-spin 1s linear infinite; }
+@keyframes dlp-spin { to { transform: rotate(360deg); } }
+@media (max-width: 600px) {
+  .dlp[open] { width: 100vw; border-left: 0; }
+}

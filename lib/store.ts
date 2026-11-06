@@ -79,6 +79,7 @@ export const cols = {
   interactions: new Col<FlagDoc>('interactions'),
   notifications: new Col<any>('notifications'),
   events: new Col<any>('events'),
+  downloads: new Col<any>('downloads'),
 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
 

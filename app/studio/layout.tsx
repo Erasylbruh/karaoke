@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { LayoutDashboard, Film, BarChart3, Settings } from 'lucide-react';
+import { LayoutDashboard, Film, BarChart3, Settings, Download } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import SideNav from '@/components/layout/SideNav';
 
@@ -38,6 +38,7 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
           { href: '/studio', label: 'Обзор', icon: <LayoutDashboard {...ICON} />, exact: true },
           { href: '/studio/content', label: 'Контент', icon: <Film {...ICON} /> },
           { href: '/studio/analytics', label: 'Аналитика', icon: <BarChart3 {...ICON} /> },
+          { href: '/studio/downloads', label: 'Загрузки', icon: <Download {...ICON} /> },
           { href: '/studio/settings', label: 'Настройки', icon: <Settings {...ICON} /> },
         ]}
       />

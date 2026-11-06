@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { ShieldCheck, LogOut, User as UserIcon, LayoutDashboard, Plus } from 'lucide-react';
 import NotificationsBell from '@/components/layout/NotificationsBell';
+import { DownloadsButton } from '@/components/downloads/DownloadsPanel';
 
 const menuItem: React.CSSProperties = {
   display: 'flex',
@@ -60,6 +61,7 @@ export default function Navbar() {
         <Plus style={{ width: 16, height: 16 }} aria-hidden="true" />
         <span className="hd-label">Создать</span>
       </Link>
+      {user && <DownloadsButton />}
       <NotificationsBell />
 
       {user ? (

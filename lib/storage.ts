@@ -15,6 +15,7 @@ import {
   NotificationType,
   DailyStat,
   StatType,
+  DownloadRecord,
 } from './types';
 import { cols, Col } from './store';
 
@@ -60,6 +61,7 @@ const CM = cols.comments as Col<Comment>;
 const PL = cols.playlists as Col<Playlist>;
 const NT = cols.notifications as Col<AppNotification>;
 const ST = cols.events as Col<DailyStat>;
+const DL = cols.downloads as Col<DownloadRecord>;
 
 // ---------------- HELPERS ----------------
 
@@ -587,3 +589,20 @@ export function resetTutorials(userKey: string) {
   localSet(LOCAL_KEYS.TUTORIAL, m);
 }
 
+// ---------------- DOWNLOAD HISTORY ----------------
+
+export function addDownloadRecord(record: DownloadRecord) {
+  DL.set(record);
+}
+
+/** The user's finished downloads, newest first. */
+export function getDownloadHistory(userId: string | undefined): DownloadRecord[] {
+  if (!userId) return [];
+  return DL.all()
+    .filter((d) => d.userId === userId)
+    .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
+export function deleteDownloadRecord(id: string) {
+  DL.remove(id);
+}
