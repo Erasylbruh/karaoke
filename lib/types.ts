@@ -164,6 +164,7 @@ export interface DownloadRecord {
   title: string;
   artist: string;
   format: 'reel' | 'landscape';
+  quality?: '480p' | '720p' | '1080p';
   /** Background colour of the project, for the card when the project has no cover. */
   color?: string;
   createdAt: string;

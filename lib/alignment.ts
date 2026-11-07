@@ -84,16 +84,66 @@ export async function isAlignerOnline(timeoutMs = 2000): Promise<boolean> {
   }
 }
 
-/** Kazakh letters -> kk, other Cyrillic -> ru, anything else is left to auto-detection. */
+/** Language from the script of the lyrics; anything unclear is left to Whisper's detection. */
 export function guessLanguage(text: string): string {
+  if (/[぀-ヿ]/.test(text)) return 'ja'; // hiragana / katakana
+  if (/[가-힯]/.test(text)) return 'ko'; // hangul
+  if (/[一-鿿]/.test(text)) return 'zh'; // han only
   if (/[әғқңөұүһі]/i.test(text)) return 'kk';
   if (/[а-яё]/i.test(text)) return 'ru';
   return 'auto';
 }
 
+const ALIGN_RATE = 16_000;
+
+/**
+ * Decodes the song in the browser (which reads almost any format: mp3, ogg/opus, m4a, wav,
+ * flac…) and returns 16 kHz mono WAV — exactly what Whisper uses. The aligner then never meets
+ * a codec it can't read, and the upload is 5-10x smaller than the original file.
+ */
+export async function toAlignerWav(audio: Blob): Promise<Blob> {
+  const ctx = new AudioContext();
+  let decoded: AudioBuffer;
+  try {
+    decoded = await ctx.decodeAudioData(await audio.arrayBuffer());
+  } finally {
+    void ctx.close().catch(() => undefined);
+  }
+  const frames = Math.ceil(decoded.duration * ALIGN_RATE);
+  const off = new OfflineAudioContext(1, frames, ALIGN_RATE); // the browser resamples and mixes to mono
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  const pcm = (await off.startRendering()).getChannelData(0);
+
+  const buf = new ArrayBuffer(44 + pcm.length * 2);
+  const v = new DataView(buf);
+  const str = (o: number, t: string) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF');
+  v.setUint32(4, 36 + pcm.length * 2, true);
+  str(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); // PCM
+  v.setUint16(22, 1, true); // mono
+  v.setUint32(24, ALIGN_RATE, true);
+  v.setUint32(28, ALIGN_RATE * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  str(36, 'data');
+  v.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true);
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
 export async function alignLyrics(audio: Blob, fileName: string, lines: string[]): Promise<AlignmentResult> {
   const form = new FormData();
-  form.append('audio', audio, fileName || 'audio.mp3');
+  try {
+    form.append('audio', await toAlignerWav(audio), 'audio.wav');
+  } catch {
+    // The browser could not decode it: let the aligner try the original file.
+    form.append('audio', audio, fileName || 'audio.mp3');
+  }
   form.append('lyrics', JSON.stringify(lines));
   form.append('language', guessLanguage(lines.join(' ')));
   let res: Response;

@@ -31,15 +31,17 @@ import { synthPlayer } from '@/lib/audio-synthesizer';
 import { isBlobRef, resolveBlobUrl, uploadLocalBlob } from '@/lib/blob-store';
 import { ensureStyleFont, fontCss } from '@/lib/fonts';
 import { useDownloads } from '@/context/DownloadsContext';
-import type { ExportFormat } from '@/lib/video-render';
+import { QUALITY_OPTIONS, getPreferredQuality, setPreferredQuality } from '@/lib/video-render';
+import type { ExportFormat, VideoQuality } from '@/lib/video-render';
 import CommentsSection from '@/components/karaoke/CommentsSection';
 import PlaylistPicker from '@/components/karaoke/PlaylistPicker';
 import Tutorial from '@/components/ui/Tutorial';
 import { useDataVersion } from '@/components/DataProvider';
 
 /** «Скачать ▾»: pick the video format; the video is made in the background (see DownloadsContext). */
-function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat) => void; karaokeId: string }) {
+function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: VideoQuality) => void; karaokeId: string }) {
   const { jobs, openPanel } = useDownloads();
+  const [quality, setQuality] = useState<VideoQuality>('720p');
   const mine = jobs.find((j) => j.karaoke.id === karaokeId && (j.status === 'rendering' || j.status === 'queued'));
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<React.CSSProperties | undefined>(undefined);
@@ -47,7 +49,16 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat) => void
   // The info column scrolls, so the list is positioned against the viewport instead of being clipped by it.
   const toggle = () => {
     const r = ref.current?.getBoundingClientRect();
-    setPos(r && window.innerWidth > 820 ? { position: 'fixed', top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 250) } : undefined);
+    // Opens upward when there is not enough room below the button (the list is ~330 px tall).
+    const below = r ? window.innerHeight - r.bottom : 0;
+    setPos(
+      r && window.innerWidth > 820
+        ? below > 340
+          ? { position: 'fixed', top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 250) }
+          : { position: 'fixed', bottom: window.innerHeight - r.top + 6, left: Math.min(r.left, window.innerWidth - 250), top: 'auto' }
+        : undefined
+    );
+    if (!open) setQuality(getPreferredQuality());
     setOpen(!open);
   };
   useEffect(() => {
@@ -63,7 +74,7 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat) => void
   }, [open]);
   const pick = (f: ExportFormat) => {
     setOpen(false);
-    onPick(f);
+    onPick(f, quality);
   };
   return (
     <div className="dl-menu" ref={ref}>
@@ -74,6 +85,24 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat) => void
       </button>
       {open && (
         <div className="dl-list" role="menu" style={pos}>
+          <div className="dl-q" role="radiogroup" aria-label="Качество видео">
+            {QUALITY_OPTIONS.map((q) => (
+              <button
+                key={q.id}
+                type="button"
+                role="radio"
+                aria-checked={quality === q.id}
+                className={quality === q.id ? 'on' : ''}
+                onClick={() => {
+                  setQuality(q.id);
+                  setPreferredQuality(q.id);
+                }}
+              >
+                <b>{q.label}</b>
+                <span>{q.hint}</span>
+              </button>
+            ))}
+          </div>
           <button role="menuitem" onClick={() => pick('reel')}>
             <b>Вертикальное 9:16</b>
             <span>Reels, Shorts, TikTok</span>
@@ -459,9 +488,9 @@ function KaraokePlayerContent() {
     showToast(res.isLiked ? 'Добавлено в понравившиеся' : 'Удалено из понравившихся');
   };
 
-  const handleOpenDownload = (format: ExportFormat) => {
+  const handleOpenDownload = (format: ExportFormat, quality: VideoQuality) => {
     if (!requireAccount('Скачивать видео могут только зарегистрированные пользователи.')) return;
-    if (karaoke) startDownload(karaoke, format);
+    if (karaoke) startDownload(karaoke, format, quality);
   };
 
   const handleShare = () => {
@@ -553,7 +582,7 @@ function KaraokePlayerContent() {
         // On phones these buttons sit in the bottom sheet, which closes after an action. A button
         // that only opens a menu (Скачать ▾) must keep it open, or the menu vanishes with it.
         const btn = event.target instanceof Element ? event.target.closest('button') : null;
-        if (btn && !btn.matches('[aria-haspopup="menu"]')) actionsRef.current?.close();
+        if (btn && !btn.matches('[aria-haspopup="menu"]') && !btn.closest('.dl-q')) actionsRef.current?.close();
       }}>
         <button className="bt player-like" aria-pressed={isLiked} aria-label="Лайк" onClick={handleLike}>
           <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">

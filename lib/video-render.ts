@@ -33,8 +33,48 @@ export const FPS = 30;
 /** Space between lyric lines, as a share of the font size. */
 const LINE_GAP_EM = 0.05;
 
+/** Layout size of a frame; drawing always uses these units, the quality only scales them. */
 export function frameSize(format: ExportFormat) {
   return format === 'reel' ? { width: 720, height: 1280 } : { width: 1280, height: 720 };
+}
+
+export type VideoQuality = '480p' | '720p' | '1080p';
+
+export const QUALITY_OPTIONS: { id: VideoQuality; label: string; hint: string }[] = [
+  { id: '480p', label: '480p', hint: 'лёгкий файл' },
+  { id: '720p', label: '720p', hint: 'HD' },
+  { id: '1080p', label: '1080p', hint: 'Full HD' },
+];
+
+const QUALITY = {
+  '480p': { scale: 2 / 3, bitrate: 2_500_000 },
+  '720p': { scale: 1, bitrate: 5_000_000 },
+  '1080p': { scale: 1.5, bitrate: 10_000_000 },
+} as const;
+
+/** Real pixel size of the video file for a format and quality (always even, as encoders need). */
+export function outputSize(format: ExportFormat, quality: VideoQuality) {
+  const { width, height } = frameSize(format);
+  const even = (n: number) => Math.round(n / 2) * 2;
+  return { width: even(width * QUALITY[quality].scale), height: even(height * QUALITY[quality].scale) };
+}
+
+const QUALITY_KEY = 'kc_video_quality';
+export function getPreferredQuality(): VideoQuality {
+  try {
+    const q = localStorage.getItem(QUALITY_KEY);
+    if (q === '480p' || q === '720p' || q === '1080p') return q;
+  } catch {
+    // storage blocked
+  }
+  return '720p';
+}
+export function setPreferredQuality(q: VideoQuality) {
+  try {
+    localStorage.setItem(QUALITY_KEY, q);
+  } catch {
+    // storage blocked
+  }
 }
 
 /** Splits a lyric line into rows that fit `maxW` (uses the context's current font). */
@@ -411,6 +451,7 @@ export function drawKaraokeFrame(
 export interface RenderOptions {
   onProgress?: (share: number) => void;
   signal?: AbortSignal;
+  quality?: VideoQuality;
 }
 
 export interface RenderResult {
@@ -422,13 +463,17 @@ export interface RenderResult {
 
 const abortError = () => new DOMException('Загрузка отменена', 'AbortError');
 
-function makeCanvas(format: ExportFormat) {
-  const { width, height } = frameSize(format);
+/** Canvas in the output resolution; drawing is scaled so the layout code keeps 720p units. */
+function makeCanvas(format: ExportFormat, quality: VideoQuality) {
+  const base = frameSize(format);
+  const { width, height } = outputSize(format, quality);
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas недоступен');
+  ctx.setTransform(width / base.width, 0, 0, height / base.height, 0, 0);
+  ctx.imageSmoothingQuality = 'high';
   return { canvas, ctx };
 }
 
@@ -455,8 +500,8 @@ export async function renderKaraokeVideo(karaoke: Karaoke, format: ExportFormat,
   return renderRealtime(karaoke, format, audioUrl, assets, opts);
 }
 
-async function renderFast(karaoke: Karaoke, format: ExportFormat, audioUrl: string, assets: FrameAssets, { onProgress, signal }: RenderOptions): Promise<RenderResult> {
-  const { width, height } = frameSize(format);
+async function renderFast(karaoke: Karaoke, format: ExportFormat, audioUrl: string, assets: FrameAssets, { onProgress, signal, quality = '720p' }: RenderOptions): Promise<RenderResult> {
+  const { width, height } = outputSize(format, quality);
   const res = await fetch(audioUrl, { signal });
   const actx = new AudioContext();
   let audio: AudioBuffer;
@@ -475,12 +520,12 @@ async function renderFast(karaoke: Karaoke, format: ExportFormat, audioUrl: stri
   if (!videoCodec || !audioCodec) throw new Error('no encodable codecs');
   const mp4 = videoCodec === 'avc';
 
-  const { canvas, ctx } = makeCanvas(format);
+  const { canvas, ctx } = makeCanvas(format, quality);
   const output = new Output({
     format: mp4 ? new Mp4OutputFormat({ fastStart: 'in-memory' }) : new WebMOutputFormat(),
     target: new BufferTarget(),
   });
-  const video = new CanvasSource(canvas, { codec: videoCodec, bitrate: 5_000_000, keyFrameInterval: 2 });
+  const video = new CanvasSource(canvas, { codec: videoCodec, bitrate: QUALITY[quality].bitrate, keyFrameInterval: 2 });
   const sound = new AudioBufferSource({ codec: audioCodec, bitrate: 160_000 });
   output.addVideoTrack(video, { frameRate: FPS });
   output.addAudioTrack(sound);
@@ -516,8 +561,8 @@ async function renderFast(karaoke: Karaoke, format: ExportFormat, audioUrl: stri
  * Real-time capture: plays the track silently through Web Audio and records the canvas with
  * MediaRecorder. A Worker drives the frames, so a background tab keeps 30 fps.
  */
-async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: string | null, assets: FrameAssets, { onProgress, signal }: RenderOptions): Promise<RenderResult> {
-  const { canvas, ctx } = makeCanvas(format);
+async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: string | null, assets: FrameAssets, { onProgress, signal, quality = '720p' }: RenderOptions): Promise<RenderResult> {
+  const { canvas, ctx } = makeCanvas(format, quality);
   const canvasStream = canvas.captureStream(FPS);
 
   let audioTracks: MediaStreamTrack[] = [];
@@ -548,7 +593,7 @@ async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: 
     ) || 'video/webm';
   const recorder = new MediaRecorder(new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]), {
     mimeType,
-    videoBitsPerSecond: 5_000_000,
+    videoBitsPerSecond: QUALITY[quality].bitrate,
     audioBitsPerSecond: 160_000,
   });
   const chunks: Blob[] = [];
@@ -618,8 +663,8 @@ async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: 
   });
 }
 
-/** File name like "propose_vertical.mp4". */
-export function videoFileName(karaoke: Pick<Karaoke, 'title'>, format: ExportFormat, ext: string) {
+/** File name like "propose_vertical_1080p.mp4". */
+export function videoFileName(karaoke: Pick<Karaoke, 'title'>, format: ExportFormat, ext: string, quality: VideoQuality = '720p') {
   const base = karaoke.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'karaoke';
-  return `${base}_${format === 'reel' ? 'vertical' : 'horizontal'}.${ext}`;
+  return `${base}_${format === 'reel' ? 'vertical' : 'horizontal'}_${quality}.${ext}`;
 }

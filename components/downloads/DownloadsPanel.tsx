@@ -96,7 +96,7 @@ export default function DownloadsPanel() {
                   <DownloadCover karaokeId={r.karaokeId} color={r.color} />
                   <div className="dlp-body">
                     {projectLink(r.karaokeId, r.title)}
-                    <span className="dlp-meta">{r.artist} · {FORMAT_LABEL[r.format]} · {formatDate(r.createdAt)}</span>
+                    <span className="dlp-meta">{r.artist} · {FORMAT_LABEL[r.format]}{r.quality ? ` ${r.quality}` : ''} · {formatDate(r.createdAt)}</span>
                   </div>
                 </li>
               );
@@ -108,7 +108,7 @@ export default function DownloadsPanel() {
                 <DownloadCover karaokeId={j.karaoke.id} color={j.karaoke.style?.backgroundColor} />
                 <div className="dlp-body">
                   {projectLink(j.karaoke.id, j.karaoke.title)}
-                  <span className="dlp-meta">{j.karaoke.artist} · {FORMAT_LABEL[j.format]}</span>
+                  <span className="dlp-meta">{j.karaoke.artist} · {FORMAT_LABEL[j.format]} {j.quality}</span>
                   {(j.status === 'rendering' || j.status === 'queued') && (
                     <>
                       <div className="dlp-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Готовность видео">
@@ -140,7 +140,7 @@ export default function DownloadsPanel() {
                     </button>
                   )}
                   {j.status === 'error' && (
-                    <button type="button" className="bt sm gh" onClick={() => startDownload(j.karaoke, j.format)} aria-label="Повторить" title="Повторить">
+                    <button type="button" className="bt sm gh" onClick={() => startDownload(j.karaoke, j.format, j.quality)} aria-label="Повторить" title="Повторить">
                       <RotateCcw size={15} aria-hidden="true" />
                     </button>
                   )}

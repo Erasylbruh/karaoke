@@ -8,7 +8,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Karaoke } from '@/lib/types';
-import { ExportFormat, renderKaraokeVideo, videoFileName } from '@/lib/video-render';
+import { ExportFormat, VideoQuality, getPreferredQuality, renderKaraokeVideo, videoFileName } from '@/lib/video-render';
 import { addDownloadRecord, getKaraokeById, registerDownload, uid } from '@/lib/storage';
 import { useAuth } from '@/context/AuthContext';
 
@@ -18,6 +18,7 @@ export interface DownloadJob {
   id: string;
   karaoke: Karaoke;
   format: ExportFormat;
+  quality: VideoQuality;
   status: JobStatus;
   progress: number; // 0..1
   url?: string;
@@ -32,7 +33,8 @@ interface DownloadsApi {
   busy: boolean;
   /** Progress of the job being rendered (0..1), or null. */
   activeProgress: number | null;
-  startDownload: (karaoke: Karaoke, format: ExportFormat) => void;
+  /** `quality` defaults to the one last chosen in the download menu. */
+  startDownload: (karaoke: Karaoke, format: ExportFormat, quality?: VideoQuality) => void;
   cancelJob: (id: string) => void;
   saveAgain: (id: string) => void;
   panelOpen: boolean;
@@ -82,6 +84,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     let lastShown = 0;
     renderKaraokeVideo(next.karaoke, next.format, {
       signal: ctrl.signal,
+      quality: next.quality,
       onProgress: (share) => {
         // Re-render the panel at most every 1 %.
         if (share - lastShown >= 0.01 || share === 1) {
@@ -92,7 +95,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     })
       .then(({ blob, ext }) => {
         const url = URL.createObjectURL(blob);
-        const fileName = videoFileName(next.karaoke, next.format, ext);
+        const fileName = videoFileName(next.karaoke, next.format, ext, next.quality);
         // Mark done and release the oldest finished videos still held in memory.
         setJobs((prev) => {
           let kept = 0;
@@ -116,6 +119,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
             title: next.karaoke.title,
             artist: next.karaoke.artist,
             format: next.format,
+            quality: next.quality,
             color: next.karaoke.style?.backgroundColor,
             createdAt: new Date().toISOString(),
           });
@@ -149,15 +153,23 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [busy]);
 
-  const startDownload = useCallback((karaoke: Karaoke, format: ExportFormat) => {
+  const startDownload = useCallback((karaoke: Karaoke, format: ExportFormat, quality: VideoQuality = getPreferredQuality()) => {
     setJobs((prev) => {
       // The same video already in progress: just show it.
-      if (prev.some((j) => j.karaoke.id === karaoke.id && j.format === format && (j.status === 'queued' || j.status === 'rendering'))) {
+      if (
+        prev.some(
+          (j) =>
+            j.karaoke.id === karaoke.id &&
+            j.format === format &&
+            j.quality === quality &&
+            (j.status === 'queued' || j.status === 'rendering')
+        )
+      ) {
         return prev;
       }
       // Newest on top.
       return [
-        { id: 'dl-' + uid(), karaoke, format, status: 'queued', progress: 0, createdAt: new Date().toISOString() },
+        { id: 'dl-' + uid(), karaoke, format, quality, status: 'queued', progress: 0, createdAt: new Date().toISOString() },
         ...prev,
       ];
     });

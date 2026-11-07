@@ -33,13 +33,51 @@ pub struct LineTiming {
     pub words: Vec<WordTiming>,
 }
 
-/// Lowercase letters and digits only; ё -> е so both spellings match.
+/// Lowercase letters and digits only; ё -> е and katakana -> hiragana, so both spellings match.
 pub fn normalize(word: &str) -> String {
     word.chars()
         .filter(|c| c.is_alphanumeric())
         .flat_map(|c| c.to_lowercase())
-        .map(|c| if c == 'ё' { 'е' } else { c })
+        .map(|c| match c {
+            'ё' => 'е',
+            '\u{30A1}'..='\u{30F6}' => char::from_u32(c as u32 - 0x60).unwrap_or(c),
+            _ => c,
+        })
         .collect()
+}
+
+/// Japanese, Chinese and Korean characters. These scripts put no spaces between words,
+/// so they are matched character by character.
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{3040}'..='\u{30FF}'     // hiragana, katakana
+        | '\u{3400}'..='\u{4DBF}'   // CJK extension A
+        | '\u{4E00}'..='\u{9FFF}'   // CJK ideographs
+        | '\u{AC00}'..='\u{D7AF}'   // hangul syllables
+        | '\u{FF66}'..='\u{FF9F}'   // half-width katakana
+    )
+}
+
+/// Splits text into matching units: each CJK character on its own, other runs as words.
+pub fn units(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for word in text.split_whitespace() {
+        let mut run = String::new();
+        for c in word.chars() {
+            if is_cjk(c) {
+                if !run.is_empty() {
+                    out.push(std::mem::take(&mut run));
+                }
+                out.push(c.to_string());
+            } else {
+                run.push(c);
+            }
+        }
+        if !run.is_empty() {
+            out.push(run);
+        }
+    }
+    out
 }
 
 /// 1 - normalised Levenshtein distance (0 = different, 1 = equal).
@@ -120,14 +158,31 @@ pub fn align(lines: &[String], heard: &[Heard], duration: f32) -> Vec<LineTiming
     // Flatten the lyrics into words, remembering their line.
     let mut words: Vec<(usize, String, String)> = Vec::new(); // (line, original, normalised)
     for (li, line) in lines.iter().enumerate() {
-        for w in line.split_whitespace() {
-            let norm = normalize(w);
+        for w in units(line) {
+            let norm = normalize(&w);
             if !norm.is_empty() {
-                words.push((li, w.to_string(), norm));
+                words.push((li, w, norm));
             }
         }
     }
-    let heard: Vec<&Heard> = heard.iter().filter(|h| !normalize(&h.text).is_empty()).collect();
+    // Heard pieces are split the same way; a piece's time is shared among its units by length.
+    let heard: Vec<Heard> = heard
+        .iter()
+        .flat_map(|h| {
+            let parts: Vec<String> = units(&h.text).into_iter().filter(|u| !normalize(u).is_empty()).collect();
+            let total = parts.iter().map(|p| p.chars().count()).sum::<usize>().max(1);
+            let mut t = h.start;
+            parts
+                .into_iter()
+                .map(|p| {
+                    let d = (h.end - h.start).max(0.0) * p.chars().count() as f32 / total as f32;
+                    let piece = Heard { text: p, start: t, end: t + d };
+                    t += d;
+                    piece
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
     let heard_norm: Vec<String> = heard.iter().map(|h| normalize(&h.text)).collect();
     let lyric_norm: Vec<String> = words.iter().map(|w| w.2.clone()).collect();
     let matches = align_words(&lyric_norm, &heard_norm);
@@ -263,6 +318,21 @@ mod tests {
         assert!(!out[1].words[1].matched);
         assert!(out[1].end > 5.6);
         assert_eq!(out[1].confidence, 0.5);
+    }
+
+    #[test]
+    fn japanese_is_matched_by_character() {
+        assert_eq!(units("君の名は"), vec!["君", "の", "名", "は"]);
+        assert_eq!(units("I love 東京"), vec!["I", "love", "東", "京"]);
+        // katakana and hiragana spellings match
+        assert_eq!(normalize("カタ"), normalize("かた"));
+        let lines = vec!["君の名は".to_string(), "夢を見た".to_string()];
+        // Whisper returns multi-character pieces; "見" was heard as "み".
+        let heard = vec![h("君の", 1.0, 1.6), h("名は", 1.6, 2.2), h("夢を", 4.0, 4.6), h("みた", 4.6, 5.2)];
+        let out = align(&lines, &heard, 10.0);
+        assert!((out[0].start - 1.0).abs() < 0.01);
+        assert!((out[1].start - 4.0).abs() < 0.01);
+        assert!(out[1].confidence >= 0.5);
     }
 
     #[test]

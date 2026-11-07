@@ -49,12 +49,12 @@ export default function StudioDownloads() {
                         </div>
                       </div>
                     </td>
-                    <td>{FORMAT_LABEL[r.format]}</td>
+                    <td>{FORMAT_LABEL[r.format]}{r.quality ? `, ${r.quality}` : ''}</td>
                     <td>{formatDate(r.createdAt)}</td>
                     <td className="ac">
                       <div className="row" style={{ justifyContent: 'flex-end' }}>
                         {k && (
-                          <button className="bt sm" onClick={() => startDownload(k, r.format)}>
+                          <button className="bt sm" onClick={() => startDownload(k, r.format, r.quality)}>
                             <Download size={14} aria-hidden="true" /> Скачать снова
                           </button>
                         )}

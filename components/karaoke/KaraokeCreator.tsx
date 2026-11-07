@@ -20,6 +20,7 @@ import {
 } from '@/lib/fonts';
 import { alignLyrics, isAlignerOnline, localAccessState, LOCAL_ACCESS_HINT } from '@/lib/alignment';
 import { useDownloads } from '@/context/DownloadsContext';
+import { compressAudio, needsCompression } from '@/lib/audio-compress';
 import Tutorial from '@/components/ui/Tutorial';
 
 const STEPS = ['Аудио и информация', 'Текст и тайминг', 'Стиль', 'Доступ'] as const;
@@ -30,7 +31,10 @@ const ZONE_BOTTOM = 88;
 const ZONES = [1, 2, 3];
 
 const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i;
+/** Storage limit for the uploaded (possibly compressed) file. */
 const AUDIO_MAX_BYTES = 40 * 1024 * 1024;
+/** Biggest original we try to compress in the browser (a ~20-minute WAV). */
+const AUDIO_SOURCE_MAX_BYTES = 250 * 1024 * 1024;
 
 const SAMPLE_TEXT = `Город гаснет за стеклом
 Фонари плывут рекой
@@ -127,6 +131,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const [busy, setBusy] = useState(false);
   // Share of the audio file sent to the cloud (0..1) while it uploads.
   const [uploadShare, setUploadShare] = useState<number | null>(null);
+  const [uploadPhase, setUploadPhase] = useState<'compress' | 'upload'>('upload');
   // Auto timing: null = not checked yet; confidence per line id after a run.
   const [alignerOnline, setAlignerOnline] = useState<boolean | null>(null);
   const [aligning, setAligning] = useState(false);
@@ -207,13 +212,28 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       showToast('Нужен аудиофайл: mp3, wav, ogg, m4a, aac или flac');
       return;
     }
-    if (file.size > AUDIO_MAX_BYTES) {
-      showToast('Файл слишком большой — максимум 40 МБ');
+    if (file.size > AUDIO_SOURCE_MAX_BYTES) {
+      showToast('Файл слишком большой — максимум 250 МБ');
       return;
     }
     setBusy(true);
     setUploadShare(0);
     try {
+      // Long WAV/FLAC files would not fit the storage limit: shrink them to M4A first.
+      if (needsCompression(file)) {
+        setUploadPhase('compress');
+        try {
+          file = await compressAudio(file, setUploadShare);
+        } catch {
+          // keep the original; the size check below decides whether it can still be uploaded
+        }
+        setUploadShare(0);
+      }
+      if (file.size > AUDIO_MAX_BYTES) {
+        showToast('Файл слишком большой даже после сжатия — максимум 40 МБ');
+        return;
+      }
+      setUploadPhase('upload');
       const ref = await putBlob(file, 'audio', setUploadShare);
       if (isBlobRef(ref)) showToast('Не удалось загрузить песню в облако: пока она будет слышна только в этом браузере');
       setAudioRef(ref);
@@ -615,7 +635,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                   <b>1. Загрузите аудио</b>
                   <label className="bt" style={{ cursor: 'pointer', padding: '28px 16px', borderStyle: 'dashed', flexDirection: 'column' }}>
                     {busy
-                      ? `Загрузка в облако… ${Math.round((uploadShare ?? 0) * 100)}%`
+                      ? `${uploadPhase === 'compress' ? 'Сжимаю аудио' : 'Загрузка в облако'}… ${Math.round((uploadShare ?? 0) * 100)}%`
                       : audioName
                         ? `Выбрано: ${audioName}`
                         : 'Выберите файл (mp3, wav, ogg, m4a)'}
@@ -631,7 +651,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                         <i style={{ width: `${Math.round((uploadShare ?? 0) * 100)}%` }} />
                       </span>
                     ) : (
-                      <span className="mu sm">до 40 МБ</span>
+                      <span className="mu sm">длинные WAV и FLAC сожмутся автоматически</span>
                     )}
                     <input type="file" hidden accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" onChange={(e) => handleAudio(e.target.files?.[0])} />
                   </label>
