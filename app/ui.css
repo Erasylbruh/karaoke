@@ -547,3 +547,16 @@ a.dlp-title:hover { color: var(--ac); }
 .dl-q button b { font-size: 13px; }
 .dl-q button span { font-size: 10px; color: #a1a1aa; }
 .dl-q button.on { border-color: var(--ac); background: color-mix(in srgb, var(--ac) 14%, transparent); color: #fff; }
+
+/* Editor: the preview column (with the player in the timing step) follows the page while the
+   timing table scrolls — sticky keeps it in the grid, so nothing overlaps or needs measuring. */
+.pv { position: sticky; top: 78px; align-self: start; gap: 12px; padding: 20px; min-height: 0; max-height: calc(100dvh - 94px); }
+.pv .fr.v { height: min(calc(100dvh - 360px), 580px); width: calc(min(calc(100dvh - 360px), 580px) * 9 / 16); }
+.pv .fr.h { width: min(100%, 680px, calc((100dvh - 360px) * 16 / 9)); }
+.pv-audio { width: min(100%, 420px); }
+@media (max-width: 960px) {
+  /* Phones and narrow windows: a compact preview + player pinned under the header, above the table. */
+  .pv { order: -1; top: 62px; z-index: 15; padding: 10px; border-radius: 0 0 20px 20px; gap: 8px; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35); }
+  .pv .fr.v { height: 27vh; width: calc(27vh * 9 / 16); }
+  .pv .fr.h { width: min(100%, calc(27vh * 16 / 9)); }
+}

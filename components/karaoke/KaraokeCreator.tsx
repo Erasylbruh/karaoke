@@ -718,16 +718,6 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
             {/* ---------------- STEP 2 ---------------- */}
             {step === 1 && (
               <>
-                {audioUrl && (
-                  <audio
-                    ref={audioEl}
-                    src={audioUrl}
-                    controls
-                    style={{ width: '100%' }}
-                    onLoadedMetadata={(e) => setAudioDuration(e.currentTarget.duration || 0)}
-                    onTimeUpdate={(e) => setAudioTime(e.currentTarget.currentTime)}
-                  />
-                )}
                 {demoAudio && <p className="mu sm" style={{ margin: 0 }}>С демо-мелодией кнопки «⏱» недоступны: впишите тайминги вручную.</p>}
 
                 <div className="card stack">
@@ -953,6 +943,17 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                   KaraokeCraft
                 </div>
               </div>
+              {/* Timing step: the player sits right under the preview and travels with it. */}
+              {step === 1 && audioUrl && (
+                <audio
+                  ref={audioEl}
+                  className="pv-audio"
+                  src={audioUrl}
+                  controls
+                  onLoadedMetadata={(e) => setAudioDuration(e.currentTarget.duration || 0)}
+                  onTimeUpdate={(e) => setAudioTime(e.currentTarget.currentTime)}
+                />
+              )}
             </div>
           )}
         </div>
