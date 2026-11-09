@@ -1,16 +1,34 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Users, Music, ShieldCheck, BarChart3 } from 'lucide-react';
+import { Users, Music, ShieldCheck, BarChart3, Flag } from 'lucide-react';
+import { doc, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
 import SideNav from '@/components/layout/SideNav';
 import Tutorial from '@/components/ui/Tutorial';
+import { db } from '@/lib/firebase';
 
 const ICON = { width: 16, height: 16 };
 
+function LegacyAdminAccess({ uid, profileId, children }: { uid: string; profileId: string; children: React.ReactNode }) {
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  useEffect(() => {
+    let current = true;
+    void setDoc(doc(db, 'legacyAdminProfiles', uid), { profileId }).then(
+      () => { if (current) setStatus('ready'); },
+      () => { if (current) setStatus('error'); },
+    );
+    return () => { current = false; };
+  }, [uid, profileId]);
+
+  if (status === 'ready') return children;
+  if (status === 'error') return <p role="alert">Не удалось подтвердить права администратора. Обновите страницу.</p>;
+  return <p role="status">Проверяем права администратора…</p>;
+}
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
-  const { isAdmin, isLoading } = useAuth();
+  const { user, isAdmin, isLoading } = useAuth();
 
   // Keep the page in the tree while auth loads (hidden), so the route still renders a static shell.
   if (isLoading) {
@@ -36,7 +54,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <Tutorial
         page="admin"
         steps={[
-          { title: 'Панель модерации', text: 'Выберите раздел в боковой панели: пользователи, треки, администраторы или аналитика.' },
+          { title: 'Панель модерации', text: 'Выберите раздел в боковой панели: пользователи, треки, жалобы, администраторы или аналитика.' },
           { title: 'Горизонтальные вкладки', text: 'Внутри раздела вкладки переключают статус: например, предупреждения и баны у пользователей.' },
           { title: 'Поиск', text: 'Пользователей ищите по нику или тегу (@admin), треки — по названию или автору.' },
         ]}
@@ -46,11 +64,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         items={[
           { href: '/admin/users', label: 'Пользователи', icon: <Users {...ICON} /> },
           { href: '/admin/tracks', label: 'Треки', icon: <Music {...ICON} /> },
+          { href: '/admin/reports', label: 'Жалобы', icon: <Flag {...ICON} /> },
           { href: '/admin/admins', label: 'Админы', icon: <ShieldCheck {...ICON} /> },
           { href: '/admin/analytics', label: 'Аналитика', icon: <BarChart3 {...ICON} /> },
         ]}
       />
-      <div className="main">{children}</div>
+      <div className="main">
+        {user?.uid && user.uid !== user.id ? (
+          <LegacyAdminAccess key={user.uid} uid={user.uid} profileId={user.id}>{children}</LegacyAdminAccess>
+        ) : children}
+      </div>
     </div>
   );
 }

@@ -6,8 +6,10 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
+  type User as FirebaseUser,
 } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { doc, updateDoc } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 import { User } from '../lib/types';
 import {
   saveUser,
@@ -99,16 +101,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [authUid, version]);
 
   /** Makes sure the signed-in account has a profile document linked by uid. */
-  const linkProfile = (fbUid: string, email: string): User | null => {
-    const byUid = getUserByUid(fbUid);
+  const linkProfile = async (account: FirebaseUser): Promise<User | null> => {
+    const byUid = getUserByUid(account.uid);
     if (byUid) return byUid;
-    const byEmail = getUserByEmail(email);
-    if (byEmail) return saveUser({ ...byEmail, uid: fbUid });
-    return null;
+    const byEmail = account.email ? getUserByEmail(account.email) : undefined;
+    if (!byEmail || byEmail.uid) return null;
+    if (!account.emailVerified) throw new Error('Для входа со старым профилем подтвердите email или обратитесь к администратору.');
+    await updateDoc(doc(db, 'users', byEmail.id), { uid: account.uid });
+    return { ...byEmail, uid: account.uid };
   };
 
-  const finishSignIn = async (fbUid: string, email: string): Promise<AuthResult> => {
-    const profile = linkProfile(fbUid, email);
+  const finishSignIn = async (account: FirebaseUser): Promise<AuthResult> => {
+    const profile = await linkProfile(account).catch(async (error) => {
+      await signOut(auth);
+      throw error;
+    });
     if (!profile) {
       await signOut(auth);
       return { ok: false, error: 'Профиль не найден. Зарегистрируйтесь заново' };
@@ -128,7 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!email) return { ok: false, error: 'Пользователь с таким тегом не найден' };
     try {
       const cred = await signInWithEmailAndPassword(auth, email, password);
-      return finishSignIn(cred.user.uid, email);
+      return await finishSignIn(cred.user);
     } catch (e) {
       return { ok: false, error: authError(e) };
     }

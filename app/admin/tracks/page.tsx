@@ -1,7 +1,10 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
+import { useAuth } from '@/context/AuthContext';
+import { useDataVersion } from '@/components/DataProvider';
+import ProjectWarningDialog from '@/components/admin/ProjectWarningDialog';
 import { Karaoke } from '@/lib/types';
 import { getKaraokes, blockKaraoke, restoreKaraoke, softDeleteKaraoke, deleteKaraoke, getAuthor, RECOMMEND_THRESHOLD } from '@/lib/storage';
 import Tabs from '@/components/ui/Tabs';
@@ -10,13 +13,14 @@ import ActionMenu from '@/components/ui/ActionMenu';
 type Tab = 'active' | 'blocked' | 'deleted';
 
 export default function AdminTracks() {
-  const [items, setItems] = useState<Karaoke[]>([]);
+  const { user } = useAuth();
+  useDataVersion();
   const [tab, setTab] = useState<Tab>('active');
   const [query, setQuery] = useState('');
+  const [warningTarget, setWarningTarget] = useState<Karaoke | null>(null);
+  const [notice, setNotice] = useState('');
 
-  const reload = useCallback(() => setItems(getKaraokes()), []);
-  useEffect(reload, [reload]);
-
+  const items = user ? getKaraokes() : [];
   const q = query.trim().toLowerCase();
   const rows = items
     .filter((k) => k.status === tab)
@@ -36,7 +40,7 @@ export default function AdminTracks() {
   return (
     <>
       <h1 className="pg-h">Треки</h1>
-      <p className="pg-sub">Модерация каталога: блокировка и восстановление.</p>
+      <p className="pg-sub">Предупреждения авторам, блокировка и восстановление проектов.</p>
 
       <Tabs<Tab>
         value={tab}
@@ -58,6 +62,7 @@ export default function AdminTracks() {
         onChange={(e) => setQuery(e.target.value)}
         aria-label="Поиск треков"
       />
+      {notice && <p className="mb-4 text-sm" role="status">{notice}</p>}
 
       {rows.length === 0 ? (
         <div className="card em2">Ничего не найдено.</div>
@@ -86,21 +91,29 @@ export default function AdminTracks() {
                       {k.recommendationScore >= RECOMMEND_THRESHOLD && <span className="pill ok" style={{ marginLeft: 6 }}>рекоменд.</span>}
                     </td>
                     <td className="ac">
-                      <ActionMenu
-                        items={
-                          tab === 'active'
+                      <div className="row" style={{ justifyContent: 'flex-end' }}>
+                        {user && tab !== 'deleted' && (
+                          <button type="button" className="bt sm" aria-haspopup="dialog"
+                            aria-label={`Предупредить автора проекта «${k.title}»`}
+                            onClick={() => {
+                              setNotice('');
+                              setWarningTarget(k);
+                            }}>Предупредить</button>
+                        )}
+                        <ActionMenu
+                          items={tab === 'active'
                             ? [
-                                { label: 'Заблокировать', danger: true, onSelect: () => { blockKaraoke(k.id); reload(); } },
-                                { label: 'Удалить', onSelect: () => { if (window.confirm(`Удалить «${k.title}»?`)) { softDeleteKaraoke(k.id); reload(); } } },
+                                { label: 'Заблокировать', danger: true, onSelect: () => blockKaraoke(k.id) },
+                                { label: 'Удалить', onSelect: () => { if (window.confirm(`Удалить «${k.title}»?`)) softDeleteKaraoke(k.id); } },
                               ]
                             : [
-                                { label: 'Восстановить', onSelect: () => { restoreKaraoke(k.id); reload(); } },
+                                { label: 'Восстановить', onSelect: () => restoreKaraoke(k.id) },
                                 ...(tab === 'deleted'
-                                  ? [{ label: 'Удалить навсегда', danger: true, onSelect: () => { if (window.confirm(`Удалить «${k.title}» навсегда?`)) { deleteKaraoke(k.id); reload(); } } }]
+                                  ? [{ label: 'Удалить навсегда', danger: true, onSelect: () => { if (window.confirm(`Удалить «${k.title}» навсегда?`)) deleteKaraoke(k.id); } }]
                                   : []),
-                              ]
-                        }
-                      />
+                              ]}
+                        />
+                      </div>
                     </td>
                   </tr>
                 );
@@ -108,6 +121,13 @@ export default function AdminTracks() {
             </tbody>
           </table>
         </div>
+      )}
+      {user && warningTarget && (
+        <ProjectWarningDialog key={warningTarget.id} project={warningTarget} moderatorId={user.id}
+          onClose={() => setWarningTarget(null)} onSent={() => {
+            setWarningTarget(null);
+            setNotice('Предупреждение отправлено автору проекта.');
+          }} />
       )}
     </>
   );

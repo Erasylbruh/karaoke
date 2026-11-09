@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import Link from 'next/link';
-import { ChevronDown, ChevronLeft, Download, Ellipsis, ListCheck, ListPlus, Maximize2, MessageSquare, Minimize2, Pause, Play, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, Download, Ellipsis, Flag, ListCheck, ListPlus, Maximize2, MessageSquare, Minimize2, Pause, Play, X } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { Karaoke } from '@/lib/types';
 import {
@@ -35,8 +35,10 @@ import { QUALITY_OPTIONS, getPreferredQuality, setPreferredQuality } from '@/lib
 import type { ExportFormat, VideoQuality } from '@/lib/video-render';
 import CommentsSection from '@/components/karaoke/CommentsSection';
 import PlaylistPicker from '@/components/karaoke/PlaylistPicker';
+import ProjectReportDialog from '@/components/karaoke/ProjectReportDialog';
 import Tutorial from '@/components/ui/Tutorial';
 import { useDataVersion } from '@/components/DataProvider';
+import { canReportProject } from '@/lib/project-moderation';
 
 /** «Скачать ▾»: pick the video format; the video is made in the background (see DownloadsContext). */
 function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: VideoQuality) => void; karaokeId: string }) {
@@ -157,6 +159,7 @@ function KaraokePlayerContent() {
   const [duration, setDuration] = useState(40);
   const [audioSrc, setAudioSrc] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [reportTarget, setReportTarget] = useState<{ projectId: string; reporterId: string } | null>(null);
   const { startDownload } = useDownloads();
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [following, setFollowing] = useState(false);
@@ -615,6 +618,17 @@ function KaraokePlayerContent() {
           <MessageSquare size={16} aria-hidden="true" />
           <span className="t">Отзывы{reviewCount ? ` · ${reviewCount}` : ''}</span>
         </button>
+
+        {canReportProject(karaoke, user?.id) && (
+          <button type="button" className="bt" aria-label="Пожаловаться на проект" title="Пожаловаться на проект" aria-haspopup="dialog"
+            onClick={() => {
+              if (user) setReportTarget({ projectId: karaoke.id, reporterId: user.id });
+              else openAuthPrompt('Чтобы пожаловаться на проект, войдите в аккаунт.');
+            }}>
+            <Flag size={16} aria-hidden="true" />
+            <span className="t">Пожаловаться</span>
+          </button>
+        )}
       </div>
   );
 
@@ -768,6 +782,13 @@ function KaraokePlayerContent() {
           </div>
           <CommentsSection karaokeId={karaoke.id} trackAuthorId={karaoke.authorId} highlightId={highlightId} />
         </dialog>
+        {user && reportTarget?.projectId === karaoke.id && reportTarget.reporterId === user.id && (
+          <ProjectReportDialog key={karaoke.id} project={karaoke} reporterId={user.id}
+            onClose={() => setReportTarget(null)} onSent={() => {
+              setReportTarget(null);
+              showToast('Жалоба отправлена модераторам');
+            }} />
+        )}
       </section>
 
       <div className={`ts ${toastMessage ? 'on' : ''}`} id="ts" role="status" aria-live="polite">

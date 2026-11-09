@@ -1,14 +1,141 @@
 rules_version = '2';
 
-// TEST MODE. Anyone can read and write until the date below, like Firebase's own test mode.
-// Guests also write (listen stats, recommendation interactions), so writes are not limited to
-// signed-in users yet. Before going public, replace this with per-collection rules:
-// see docs/FIREBASE.md.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
+    function userPath(id) {
+      return /databases/$(database)/documents/users/$(id);
+    }
+
+    function projectPath(id) {
+      return /databases/$(database)/documents/karaokes/$(id);
+    }
+
+    function adminLinkPath(uid) {
+      return /databases/$(database)/documents/legacyAdminProfiles/$(uid);
+    }
+
+    function ownsProfile(id) {
+      return request.auth != null && exists(userPath(id)) &&
+        get(userPath(id)).data.get('uid', id) == request.auth.uid;
+    }
+
+    function isAdminProfile(id) {
+      return ownsProfile(id) && get(userPath(id)).data.role == 'admin';
+    }
+
+    function isAdmin() {
+      return request.auth != null && (
+        isAdminProfile(request.auth.uid) ||
+        (exists(adminLinkPath(request.auth.uid)) &&
+          isAdminProfile(get(adminLinkPath(request.auth.uid)).data.profileId))
+      );
+    }
+
+    function isModerationNotification(data) {
+      return data.get('type', '') in ['warning', 'ban'];
+    }
+
+    match /users/{id} {
       allow read: if true;
-      allow write: if request.time < timestamp.date(2026, 12, 31);
+      allow create: if request.auth != null && request.auth.uid == id &&
+        request.resource.data.id == id && request.resource.data.uid == id &&
+        request.resource.data.email.lower() == request.auth.token.email.lower() &&
+        request.resource.data.role == 'user' && request.resource.data.get('status', 'active') == 'active' &&
+        !request.resource.data.keys().hasAny(['warnings', 'banUntil', 'banReason']);
+      allow update: if isAdmin() || (
+        ownsProfile(id) && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['username', 'name', 'avatar', 'bio', 'contacts'])
+      );
+      // Only a verified email can link a pre-Firebase profile to its first Auth account.
+      allow update: if request.auth != null && request.auth.token.email_verified == true &&
+        resource.data.get('uid', null) == null &&
+        request.resource.data.uid == request.auth.uid &&
+        resource.data.email.lower() == request.auth.token.email.lower() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uid']);
+      allow delete: if isAdmin();
+
+      match /projectWarnings/{warningId} {
+        allow read: if ownsProfile(id) || isAdmin();
+        allow create: if isAdminProfile(request.resource.data.moderatorId) &&
+          request.resource.data.keys().hasOnly(['karaokeId', 'karaokeTitle', 'moderatorId', 'reason', 'createdAt', 'read']) &&
+          exists(userPath(id)) && warningTargetsProject(id) &&
+          request.resource.data.reason is string && request.resource.data.reason.size() <= 1000 &&
+          request.resource.data.reason.matches('(?s).*\\S.*') &&
+          request.resource.data.createdAt == request.time && request.resource.data.read == false;
+        allow update: if ownsProfile(id) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
+          request.resource.data.read == true;
+
+        function warningTargetsProject(authorId) {
+          let project = getAfter(projectPath(request.resource.data.karaokeId)).data;
+          return project.authorId == authorId && project.title == request.resource.data.karaokeTitle &&
+            project.get('status', 'active') != 'deleted';
+        }
+      }
+    }
+
+    match /legacyAdminProfiles/{uid} {
+      allow create, update: if request.auth != null && request.auth.uid == uid &&
+        request.resource.data.keys().hasOnly(['profileId']) && isAdminProfile(request.resource.data.profileId);
+    }
+
+    match /karaokes/{id} {
+      allow read: if true;
+      allow create: if ownsProfile(request.resource.data.authorId) &&
+        request.resource.data.id == id && request.resource.data.get('status', 'active') == 'active';
+      allow update: if isAdmin() || (
+        ownsProfile(resource.data.authorId) && request.resource.data.authorId == resource.data.authorId &&
+        request.resource.data.get('id', id) == resource.data.get('id', id) &&
+        (request.resource.data.get('status', 'active') == resource.data.get('status', 'active') ||
+          request.resource.data.status == 'deleted')
+      );
+      // Playback and recommendation stats still support guests.
+      allow update: if request.time < timestamp.date(2026, 12, 31) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['viewsCount', 'likesCount', 'recommendationScore', 'isFeatured']);
+      allow delete: if isAdmin();
+    }
+
+    match /projectReports/{id} {
+      allow read: if isAdmin();
+      allow create: if ownsProfile(request.resource.data.reporterId) &&
+        request.resource.data.keys().hasOnly(['karaokeId', 'karaokeTitle', 'reporterId', 'type', 'details', 'status', 'createdAt']) &&
+        request.resource.data.type in ['copyright', 'inappropriate', 'abuse', 'spam', 'other'] &&
+        request.resource.data.details is string && request.resource.data.details.size() <= 1000 &&
+        (request.resource.data.type != 'other' || request.resource.data.details.matches('(?s).*\\S.*')) &&
+        request.resource.data.status == 'open' && request.resource.data.createdAt == request.time &&
+        reportTargetsProject();
+      allow update: if isAdminProfile(request.resource.data.reviewedBy) &&
+        resource.data.status == 'open' && request.resource.data.status == 'reviewed' &&
+        request.resource.data.reviewedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedAt', 'reviewedBy']);
+
+      function reportTargetsProject() {
+        let project = getAfter(projectPath(request.resource.data.karaokeId)).data;
+        return project.get('status', 'active') == 'active' && project.get('visibility', 'public') in ['public', 'unlisted'] &&
+          project.authorId != request.resource.data.reporterId && project.title == request.resource.data.karaokeTitle;
+      }
+    }
+
+    match /notifications/{id} {
+      allow read: if true;
+      allow create: if (isModerationNotification(request.resource.data) && isAdmin()) ||
+        (!isModerationNotification(request.resource.data) && request.time < timestamp.date(2026, 12, 31));
+      allow update: if (
+        isModerationNotification(resource.data) && ownsProfile(resource.data.userId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) && request.resource.data.read == true
+      ) || (
+        !isModerationNotification(resource.data) && !isModerationNotification(request.resource.data) &&
+        request.time < timestamp.date(2026, 12, 31)
+      );
+      allow delete: if !isModerationNotification(resource.data) && request.time < timestamp.date(2026, 12, 31);
+    }
+
+    // Existing non-moderation collections keep their test-mode access.
+    match /{legacy}/{id} {
+      allow read: if legacy in ['comments', 'playlists', 'follows', 'likes', 'interactions', 'events', 'downloads'];
+      allow write: if legacy in ['comments', 'playlists', 'follows', 'likes', 'interactions', 'events', 'downloads'] &&
+        request.time < timestamp.date(2026, 12, 31);
     }
   }
 }
