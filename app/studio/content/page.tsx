@@ -65,7 +65,7 @@ export default function StudioContent() {
         <div className="tw">
           <table className="tbl">
             <thead>
-              <tr><th>Караоке</th><th>Доступ</th><th>Просмотры</th><th>Лайки</th><th className="ac">Действия</th></tr>
+              <tr><th>Караоке</th><th>Доступ</th><th>Прослушивания</th><th>Лайки</th><th className="ac">Действия</th></tr>
             </thead>
             <tbody>
               {shown.map((k) => (

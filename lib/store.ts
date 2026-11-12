@@ -6,7 +6,7 @@
  * to Firestore in the background. Fine for testing and small data; for production, move to
  * per-page queries and server-side counters (see docs/FIREBASE.md).
  */
-import { collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, increment } from 'firebase/firestore';
 import { db } from './firebase';
 
 type Doc = { id: string };
@@ -56,6 +56,14 @@ export class Col<T extends Doc> {
     const next = { ...cur, ...partial };
     this.set(next);
     return next;
+  }
+  /** Atomic +by on a numeric field, so two people listening at once can't overwrite each other. */
+  increment(id: string, field: keyof T & string, by = 1) {
+    const cur = this.map.get(id);
+    if (!cur) return;
+    this.map.set(id, { ...cur, [field]: (Number(cur[field]) || 0) + by });
+    emit();
+    updateDoc(doc(db, this.name, id), { [field]: increment(by) }).catch((e) => report(`increment ${this.name}/${id}`, e));
   }
   remove(id: string) {
     this.map.delete(id);

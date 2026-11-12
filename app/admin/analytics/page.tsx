@@ -44,7 +44,7 @@ export default function AdminAnalytics() {
         <div className="kpis">
           <div className="kpi"><b>{karaokes.length}</b><span>Активных треков</span></div>
           <div className="kpi"><b>{users.length}</b><span>Пользователей</span></div>
-          <div className="kpi"><b>{views.toLocaleString('ru-RU')}</b><span>Просмотров</span></div>
+          <div className="kpi"><b>{views.toLocaleString('ru-RU')}</b><span>Прослушиваний</span></div>
           <div className="kpi"><b>{likes.toLocaleString('ru-RU')}</b><span>Лайков</span></div>
           <div className="kpi"><b>{karaokes.filter((k) => k.isFeatured).length}</b><span>Рекомендованных</span></div>
           <div className="kpi"><b>{banned}</b><span>Забанено</span></div>
@@ -54,7 +54,7 @@ export default function AdminAnalytics() {
       {tab === 'top' && (
         <div className="tw">
           <table className="tbl">
-            <thead><tr><th>#</th><th>Трек</th><th>Просмотры</th><th>Лайки</th></tr></thead>
+            <thead><tr><th>#</th><th>Трек</th><th>Прослушивания</th><th>Лайки</th></tr></thead>
             <tbody>
               {top.map((k, i) => (
                 <tr key={k.id}>

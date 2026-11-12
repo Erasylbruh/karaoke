@@ -168,11 +168,6 @@ export function deleteKaraoke(id: string): boolean {
   return true;
 }
 
-export function incrementViewCount(id: string): void {
-  const k = K.get(id);
-  if (k) K.patch(id, { viewsCount: (k.viewsCount || 0) + 1 });
-}
-
 // ---------------- NOTIFICATIONS ----------------
 
 export function notify(
@@ -236,9 +231,14 @@ export function getDailyStats(authorId: string, type: StatType, days = 30): { da
 /** Share of the track that must actually be heard (seeking forward does not count) for a listen. */
 export const LISTEN_SHARE = 0.45;
 
+/**
+ * One real listen: bumps the track's play counter (`viewsCount`, the ▶ number) and the author's chart.
+ * Opening the page alone never counts, and the author's own listens don't either.
+ */
 export function registerListen(karaokeId: string, actorId: string) {
   const k = K.get(karaokeId);
   if (!k || k.authorId === actorId) return;
+  K.increment(karaokeId, 'viewsCount');
   bumpStat(k.authorId, 'listen');
 }
 

@@ -42,7 +42,7 @@ export default function StudioOverview() {
 
       <div className="kpis">
         <div className="kpi"><b>{fmt(stats.tracks)}</b><span>Караоке</span></div>
-        <div className="kpi"><b>{fmt(stats.views)}</b><span>Просмотры</span></div>
+        <div className="kpi"><b>{fmt(stats.views)}</b><span>Прослушивания</span></div>
         <div className="kpi"><b>{fmt(stats.likes)}</b><span>Лайки</span></div>
         <div className="kpi"><b>{fmt(stats.followers)}</b><span>Слушатели</span></div>
         <div className="kpi"><b>{fmt(stats.featured)}</b><span>Рекомендованы сайтом</span></div>
@@ -59,7 +59,7 @@ export default function StudioOverview() {
         <div className="tw">
           <table className="tbl">
             <thead>
-              <tr><th>Караоке</th><th>Просмотры</th><th>Лайки</th><th>Видимость</th></tr>
+              <tr><th>Караоке</th><th>Прослушивания</th><th>Лайки</th><th>Видимость</th></tr>
             </thead>
             <tbody>
               {recent.map((k) => (

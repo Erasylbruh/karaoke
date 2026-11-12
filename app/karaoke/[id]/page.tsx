@@ -10,7 +10,6 @@ import {
   canViewKaraoke,
   toggleKaraokeLike,
   hasUserLiked,
-  incrementViewCount,
   registerInteraction,
   registerListen,
   LISTEN_SHARE,
@@ -215,11 +214,15 @@ function KaraokePlayerContent() {
     setGuestLeft(guestPlaysLeft(item.id));
     ensureStyleFont(item.style);
     resolveBlobUrl(item.audioUrl).then(setAudioSrc);
-    incrementViewCount(item.id);
-    heardRef.current = 0;
-    listenCountedRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user?.id]);
+
+  // A new track starts a fresh listen. Keyed on the id only: the sign-in finishing loading
+  // (user?.id changing) must not reset it, or one run could be counted twice.
+  useEffect(() => {
+    heardRef.current = 0;
+    listenCountedRef.current = false;
+  }, [id]);
 
   // Start / stop sound (author's uploaded audio, or the built-in synth preset as a fallback)
   useEffect(() => {

@@ -20,9 +20,9 @@ export default function StudioAnalytics() {
       <p className="pg-sub">Как слушатели реагируют на ваши караоке за последние 30 дней.</p>
 
       <div className="kpis">
-        <div className="kpi"><b>{stats.views.toLocaleString('ru-RU')}</b><span>Всего просмотров</span></div>
+        <div className="kpi"><b>{stats.views.toLocaleString('ru-RU')}</b><span>Всего прослушиваний</span></div>
         <div className="kpi"><b>{stats.likes.toLocaleString('ru-RU')}</b><span>Всего лайков</span></div>
-        <div className="kpi"><b>{er}%</b><span>Лайков на просмотр</span></div>
+        <div className="kpi"><b>{er}%</b><span>Лайков на прослушивание</span></div>
         <div className="kpi"><b>{stats.followers}</b><span>Слушателей</span></div>
       </div>
 
