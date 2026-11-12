@@ -121,6 +121,8 @@ export interface User {
   warnings?: number;
   banUntil?: string;
   banReason?: string;
+  /** Pages whose walkthrough this person has already seen (synced across devices). */
+  seenTutorials?: string[];
   createdAt: string;
 }
 

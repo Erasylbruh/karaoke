@@ -1,6 +1,6 @@
 /**
  * Data layer. Shared data lives in Firestore and is read through the synchronous cache in
- * lib/store.ts; only per-browser things (guest plays, seen tutorials) stay in localStorage.
+ * lib/store.ts; only per-browser things (guest plays, guests' seen tutorials) stay in localStorage.
  * See docs/FIREBASE.md for the collection layout.
  */
 import {
@@ -571,22 +571,42 @@ export function getAuthorStats(authorId: string) {
   };
 }
 
-// ---------------- TUTORIAL (per browser) ----------------
+// ---------------- TUTORIAL ----------------
+// Signed-in people keep the list in their profile, so a walkthrough seen on one device stays
+// seen on every other. Guests only have this browser (localStorage, keys `guest:{page}`).
+
+const localTutorials = () => localGet<Record<string, boolean>>(LOCAL_KEYS.TUTORIAL, {});
 
 export function isTutorialSeen(userKey: string, page: string): boolean {
-  return !!localGet<Record<string, boolean>>(LOCAL_KEYS.TUTORIAL, {})[`${userKey}:${page}`];
+  const local = localTutorials();
+  const user = userKey === 'guest' ? undefined : U.get(userKey);
+  if (!user) return !!local[`${userKey}:${page}`];
+  if (user.seenTutorials?.includes(page)) return true;
+  // Seen in this browser before signing in, or before the list moved to the profile: carry it over.
+  if (local[`${userKey}:${page}`] || local[`guest:${page}`]) {
+    markTutorialSeen(userKey, page);
+    return true;
+  }
+  return false;
 }
 
 export function markTutorialSeen(userKey: string, page: string) {
-  const m = localGet<Record<string, boolean>>(LOCAL_KEYS.TUTORIAL, {});
+  const user = userKey === 'guest' ? undefined : U.get(userKey);
+  if (user) {
+    if (!user.seenTutorials?.includes(page)) U.patch(user.id, { seenTutorials: [...(user.seenTutorials ?? []), page] });
+    return;
+  }
+  const m = localTutorials();
   m[`${userKey}:${page}`] = true;
   localSet(LOCAL_KEYS.TUTORIAL, m);
 }
 
 export function resetTutorials(userKey: string) {
-  const m = localGet<Record<string, boolean>>(LOCAL_KEYS.TUTORIAL, {});
-  Object.keys(m).forEach((k) => k.startsWith(userKey + ':') && delete m[k]);
+  // Local marks would be carried back into the profile, so they go too.
+  const m = localTutorials();
+  Object.keys(m).forEach((k) => (k.startsWith(userKey + ':') || k.startsWith('guest:')) && delete m[k]);
   localSet(LOCAL_KEYS.TUTORIAL, m);
+  if (U.get(userKey)) U.patch(userKey, { seenTutorials: [] });
 }
 
 // ---------------- DOWNLOAD HISTORY ----------------

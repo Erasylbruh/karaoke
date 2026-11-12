@@ -44,7 +44,7 @@ service cloud.firestore {
         !request.resource.data.keys().hasAny(['warnings', 'banUntil', 'banReason']);
       allow update: if isAdmin() || (
         ownsProfile(id) && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['username', 'name', 'avatar', 'bio', 'contacts'])
+          .hasOnly(['username', 'name', 'avatar', 'bio', 'contacts', 'seenTutorials'])
       );
       // Only a verified email can link a pre-Firebase profile to its first Auth account.
       allow update: if request.auth != null && request.auth.token.email_verified == true &&

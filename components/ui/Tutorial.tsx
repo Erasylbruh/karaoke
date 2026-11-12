@@ -9,7 +9,7 @@ export interface TutorialStep {
   text: string;
 }
 
-/** Per-page walkthrough. Shown once per user (or per browser for guests). */
+/** Per-page walkthrough. Shown once per account on any device (or once per browser for guests). */
 export default function Tutorial({ page, steps }: { page: string; steps: TutorialStep[] }) {
   const { user, isLoading } = useAuth();
   const [step, setStep] = useState(0);
