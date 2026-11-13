@@ -9,7 +9,7 @@ import { useDownloads, projectExists } from '@/context/DownloadsContext';
 import { DownloadCover, formatDate, PANEL_LIMIT } from '@/components/downloads/DownloadsPanel';
 import { deleteDownloadRecord, getDownloadHistory, getKaraokeById } from '@/lib/storage';
 
-const FORMAT_LABEL = { reel: 'Вертикальное 9:16', landscape: 'Горизонтальное 16:9' } as const;
+const FORMAT_LABEL = { reel: 'Вертикальное 9:16', landscape: 'Горизонтальное 16:9, пластинка', 'landscape-tv': 'Горизонтальное 16:9, караоке-ТВ' } as const;
 
 /** Full history of the user's video downloads. */
 export default function StudioDownloads() {

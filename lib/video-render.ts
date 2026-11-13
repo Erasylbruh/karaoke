@@ -27,7 +27,12 @@ import { resolveBlobUrl } from '@/lib/blob-store';
 import { getAuthor } from '@/lib/storage';
 import { synthPlayer } from '@/lib/audio-synthesizer';
 
-export type ExportFormat = 'reel' | 'landscape';
+/** reel = 9:16; landscape = 16:9 «Пластинка+»; landscape-tv = 16:9 «Караоке-ТВ». */
+export type ExportFormat = 'reel' | 'landscape' | 'landscape-tv';
+
+/** Silent title card before the audio and closing card after it, in seconds (see docs/video/). */
+export const INTRO_SEC = 2.5;
+export const OUTRO_SEC = 2.5;
 
 export const FPS = 30;
 /** Space between lyric lines, as a share of the font size. */
@@ -77,20 +82,46 @@ export function setPreferredQuality(q: VideoQuality) {
   }
 }
 
+const wordSegmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'word' }) : null;
+const graphemeSegmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+const graphemes = (s: string) => (graphemeSegmenter ? [...graphemeSegmenter.segment(s)].map((g) => g.segment) : [...s]);
+
+/**
+ * Pieces of a word too wide for one row: word boundaries of its language first (Japanese and
+ * Chinese have no spaces; "a—b" splits at the dash), single characters when even a piece is too wide.
+ */
+function splitWide(ctx: CanvasRenderingContext2D, word: string, maxW: number): string[] {
+  const parts = wordSegmenter ? [...wordSegmenter.segment(word)].map((s) => s.segment) : [word];
+  return parts.flatMap((p) => (ctx.measureText(p).width > maxW ? graphemes(p) : [p]));
+}
+
+const wrapCache = new Map<string, string[]>();
+
 /** Splits a lyric line into rows that fit `maxW` (uses the context's current font). */
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
+  const key = `${ctx.font}|${maxW}|${text}`;
+  const cached = wrapCache.get(key);
+  if (cached) return cached;
+  // Each unit goes on the row after a space (a whole word) or glued to the previous piece.
+  const units: { text: string; space: boolean }[] = [];
+  for (const w of text.split(/\s+/).filter(Boolean)) {
+    if (ctx.measureText(w).width <= maxW) units.push({ text: w, space: true });
+    else splitWide(ctx, w, maxW).forEach((p, i) => units.push({ text: p, space: i === 0 }));
+  }
   const rows: string[] = [];
   let row = '';
-  for (const w of words) {
-    const next = row ? row + ' ' + w : w;
+  for (const u of units) {
+    const next = row ? row + (u.space ? ' ' : '') + u.text : u.text;
     if (row && ctx.measureText(next).width > maxW) {
       rows.push(row);
-      row = w;
+      row = u.text;
     } else row = next;
   }
   if (row) rows.push(row);
-  return rows.length ? rows : [''];
+  const out = rows.length ? rows : [''];
+  if (wrapCache.size > 5000) wrapCache.clear();
+  wrapCache.set(key, out);
+  return out;
 }
 
 /** Shortens text with an ellipsis so it fits on one row. */
@@ -105,6 +136,8 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): str
 export interface FrameAssets {
   cover: HTMLImageElement | null;
   author: string;
+  /** "@username" when the author has a tag, otherwise the name. */
+  authorTag?: string;
 }
 
 /** Loads the cover image and the author name once per render. */
@@ -122,7 +155,8 @@ export async function prepareFrameAssets(karaoke: Karaoke): Promise<FrameAssets>
       cover = null;
     }
   }
-  return { cover, author: getAuthor(karaoke).name };
+  const author = getAuthor(karaoke);
+  return { cover, author: author.name, authorTag: author.username ? '@' + author.username : author.name };
 }
 
 /** Same colour with an alpha, for any #rgb/#rrggbb (other formats are returned as is). */
@@ -193,7 +227,7 @@ function drawThumb(ctx: CanvasRenderingContext2D, assets: FrameAssets, x: number
 }
 
 /** Vinyl record with the cover as its label; it turns while the song plays. */
-function drawVinyl(ctx: CanvasRenderingContext2D, assets: FrameAssets, cx: number, cy: number, r: number, t: number, ac: string, bg: string) {
+function drawVinyl(ctx: CanvasRenderingContext2D, assets: FrameAssets, cx: number, cy: number, r: number, t: number, ac: string, bg: string, label = 0.4) {
   const angle = t * Math.PI * 2 * 0.3; // 0.3 turns per second
   ctx.save();
   // Disc and grooves.
@@ -202,14 +236,14 @@ function drawVinyl(ctx: CanvasRenderingContext2D, assets: FrameAssets, cx: numbe
   ctx.fillStyle = '#121214';
   ctx.fill();
   ctx.lineWidth = 1;
-  for (let rr = r * 0.44; rr < r * 0.97; rr += r * 0.022) {
+  for (let rr = r * (label + 0.04); rr < r * 0.97; rr += r * 0.022) {
     ctx.beginPath();
     ctx.arc(cx, cy, rr, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(255,255,255,${0.035 + 0.025 * Math.sin(rr * 0.7)})`;
     ctx.stroke();
   }
   // Label (the cover) turns with the disc.
-  const lr = r * 0.4;
+  const lr = r * label;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
@@ -336,59 +370,261 @@ function drawLyrics(
   ctx.globalAlpha = 1;
 }
 
-/** Thin progress line: unfilled part in the text colour, filled part in the fill colour. */
-function drawProgress(ctx: CanvasRenderingContext2D, karaoke: Karaoke, x: number, y: number, w: number, share: number) {
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+
+/**
+ * Where TikTok, Reels and Shorts (9:16) or the YouTube player (16:9) put their own buttons and
+ * captions, as shares of the frame. Everything that matters stays inside.
+ */
+const SAFE = {
+  reel: { top: 0.12, bottom: 0.22, left: 0.06, right: 0.15 },
+  landscape: { top: 0.1, bottom: 0.14, left: 0.05, right: 0.05 },
+} as const;
+
+function safeBox(format: ExportFormat) {
+  const { width, height } = frameSize(format);
+  const s = format === 'reel' ? SAFE.reel : SAFE.landscape;
+  return { x0: width * s.left, x1: width * (1 - s.right), y0: height * s.top, y1: height * (1 - s.bottom) };
+}
+
+/** The progress line sits PROGRESS_GAP to the left of the lyrics. */
+const PROGRESS_W = 5;
+const PROGRESS_GAP = 5;
+
+/** Vertical progress line filled top to bottom: the rest in the text colour, the filled part in the fill colour. */
+function drawVerticalProgress(ctx: CanvasRenderingContext2D, karaoke: Karaoke, x: number, top: number, bottom: number, share: number) {
   const ac = karaoke.style?.activeColor || '#ffb547';
   const tx = karaoke.style?.textColor || '#f4f4f5';
-  ctx.fillStyle = withAlpha(tx, 0.25);
+  const h = bottom - top;
+  ctx.fillStyle = withAlpha(tx, 0.16);
   ctx.beginPath();
-  ctx.roundRect(x, y, w, 5, 2.5);
+  ctx.roundRect(x, top, PROGRESS_W, h, PROGRESS_W / 2);
   ctx.fill();
   ctx.fillStyle = ac;
   ctx.beginPath();
-  ctx.roundRect(x, y, Math.max(5, w * Math.min(1, share)), 5, 2.5);
+  ctx.roundRect(x, top, PROGRESS_W, Math.max(PROGRESS_W, h * clamp01(share)), PROGRESS_W / 2);
   ctx.fill();
 }
 
-/** Title, artist, author and the watermark stacked from (x, y); returns the y below them. */
-function drawInfo(ctx: CanvasRenderingContext2D, karaoke: Karaoke, assets: FrameAssets, x: number, y: number, maxW: number, scale: number) {
+/** Width drawBrandMark takes at height `h`. */
+function brandMarkWidth(ctx: CanvasRenderingContext2D, h: number): number {
+  ctx.save();
+  ctx.font = `600 ${h * 0.78}px "Onest", sans-serif`;
+  const w = h * 0.4 * 3 + h * 0.15 + ctx.measureText('KaraokeCraft').width;
+  ctx.restore();
+  return w;
+}
+
+const plateWidth = (ctx: CanvasRenderingContext2D, h: number) => brandMarkWidth(ctx, h) + h * 1.5;
+
+/** KaraokeCraft plate: a pill in the text colour with the mark in the background colour. */
+function drawPlate(ctx: CanvasRenderingContext2D, karaoke: Karaoke, x: number, y: number, h: number) {
+  const tx = karaoke.style?.textColor || '#f4f4f5';
+  const bg = karaoke.style?.backgroundColor || '#1d1b3a';
+  ctx.fillStyle = tx;
+  ctx.beginPath();
+  ctx.roundRect(x, y, plateWidth(ctx, h), h * 2, h);
+  ctx.fill();
+  drawBrandMark(ctx, x + h * 0.75, y + h * 0.5, h, { accent: bg, color: bg, alpha: 1 });
+}
+
+/** "Artist · @author". */
+const subtitle = (karaoke: Karaoke, assets: FrameAssets) => [karaoke.artist, assets.authorTag ?? assets.author].filter(Boolean).join(' · ');
+
+/** Turning vinyl with the title and "artist · @author" to its right, vertically centred on `cy`. */
+function drawVinylRow(
+  ctx: CanvasRenderingContext2D,
+  karaoke: Karaoke,
+  assets: FrameAssets,
+  x: number,
+  cy: number,
+  r: number,
+  t: number,
+  maxRight: number,
+  titlePx: number,
+  subPx: number
+) {
   const ac = karaoke.style?.activeColor || '#ffb547';
   const tx = karaoke.style?.textColor || '#f4f4f5';
+  const bg = karaoke.style?.backgroundColor || '#1d1b3a';
+  drawVinyl(ctx, assets, x + r, cy, r, t, ac, bg, 0.55);
+  const textX = x + r * 2.35;
+  const maxW = maxRight - textX;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = tx;
-  ctx.font = `700 ${30 * scale}px "Unbounded", "Onest", sans-serif`;
-  const titleRows = wrapText(ctx, karaoke.title, maxW).slice(0, 2);
-  if (wrapText(ctx, karaoke.title, maxW).length > 2) titleRows[1] = fitText(ctx, titleRows[1] + '…', maxW);
-  let cy = y;
-  titleRows.forEach((row) => {
-    cy += 36 * scale;
-    ctx.fillText(row, x, cy);
-  });
-  ctx.fillStyle = withAlpha(tx, 0.8);
-  ctx.font = `500 ${21 * scale}px "Onest", sans-serif`;
-  cy += 32 * scale;
-  ctx.fillText(fitText(ctx, karaoke.artist, maxW), x, cy);
-  ctx.font = `500 ${17 * scale}px "Onest", sans-serif`;
-  cy += 28 * scale;
-  ctx.fillStyle = withAlpha(tx, 0.6);
-  const label = 'Автор: ';
-  ctx.fillText(label, x, cy);
-  const lw = ctx.measureText(label).width;
-  ctx.fillStyle = tx;
-  ctx.font = `700 ${17 * scale}px "Onest", sans-serif`;
-  ctx.fillText(fitText(ctx, assets.author, maxW - lw), x + lw, cy);
-  cy += 18 * scale;
-  drawBrandMark(ctx, x, cy, 20 * scale, { accent: ac, color: tx, alpha: 0.7 });
-  return cy + 20 * scale;
+  ctx.font = `700 ${titlePx}px "Unbounded", "Onest", sans-serif`;
+  ctx.fillText(fitText(ctx, karaoke.title, maxW), textX, cy - titlePx * 0.15);
+  ctx.fillStyle = withAlpha(tx, 0.7);
+  ctx.font = `500 ${subPx}px "Onest", sans-serif`;
+  ctx.fillText(fitText(ctx, subtitle(karaoke, assets), maxW), textX, cy + subPx * 1.2);
+}
+
+/** Record player arm: `k` 0 = resting beside the disc, 1 = on the record. */
+function drawTonearm(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, k: number) {
+  const px = cx + r * 1.08;
+  const py = cy - r * 0.95;
+  const a = 0.04 + 0.38 * (1 - Math.pow(1 - clamp01(k), 3));
+  const len = r * 1.25;
+  const ex = px - len * Math.sin(a);
+  const ey = py + len * Math.cos(a);
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#3a3a3d';
+  ctx.lineWidth = r * 0.045;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.lineTo(ex, ey);
+  ctx.stroke();
+  ctx.translate(ex, ey);
+  ctx.rotate(a);
+  ctx.fillStyle = '#2b2b2e';
+  ctx.fillRect(-r * 0.05, -r * 0.02, r * 0.1, r * 0.14);
+  ctx.restore();
+  ctx.fillStyle = '#2b2b2e';
+  ctx.beginPath();
+  ctx.arc(px, py, r * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#55555a';
+  ctx.beginPath();
+  ctx.arc(px, py, r * 0.04, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** Share of line `idx` already sung at `t`. */
+function lineShare(karaoke: Karaoke, idx: number, t: number, totalSec: number) {
+  const line = karaoke.lyrics[idx];
+  const end = line.end ?? karaoke.lyrics[idx + 1]?.time ?? totalSec;
+  return clamp01((t - line.time) / Math.max(0.1, end - line.time));
 }
 
 /**
- * Draws one frame at `t` seconds, laid out like the player in the browser.
- * 9:16 — small cover with title, artist, author and the watermark on top, lyrics below,
- *        a progress line at the very bottom.
- * 16:9 — a turning vinyl record with the cover on the left, the same info under it,
- *        lyrics on the right, a progress line at the very bottom.
+ * «Караоке-ТВ»: the lyrics go in pairs, two lines at a time, without scrolling. The pair changes
+ * once both are sung; inside it a line fills left to right like in the player.
+ */
+function drawLinePair(
+  ctx: CanvasRenderingContext2D,
+  karaoke: Karaoke,
+  t: number,
+  totalSec: number,
+  box: { x: number; top: number; bottom: number; width: number; fontSize: number }
+) {
+  const lyrics = karaoke.lyrics;
+  if (!lyrics.length) return;
+  const ac = karaoke.style?.activeColor || '#ffb547';
+  const tx = karaoke.style?.textColor || '#f4f4f5';
+  const font = fontCss(karaoke.style?.font || 'Onest');
+  const activeIdx = lyrics.reduce((a, line, idx) => (t >= line.time ? idx : a), -1);
+  const first = Math.floor(Math.max(activeIdx, 0) / 2) * 2;
+  const ids = [first, first + 1].filter((i) => i < lyrics.length);
+
+  // Long lines: shrink the font until both lines fit the box.
+  let fontSize = box.fontSize;
+  let blocks: string[][] = [];
+  let height = 0;
+  for (let i = 0; i < 5; i++) {
+    ctx.font = `700 ${fontSize}px ${font}`;
+    blocks = ids.map((id) => wrapText(ctx, lyrics[id].text, box.width));
+    height = blocks.reduce((s, b) => s + b.length * fontSize * 1.18, 0) + fontSize * 0.45 * (blocks.length - 1);
+    if (height <= box.bottom - box.top) break;
+    fontSize *= 0.88;
+  }
+  const rowH = fontSize * 1.18;
+  const appear = activeIdx < 0 ? 0.5 : 0.35 + 0.65 * clamp01((t - lyrics[first].time) / 0.25);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  let y = (box.top + box.bottom) / 2 - height / 2;
+  blocks.forEach((rows, k) => {
+    const idx = ids[k];
+    const p = idx < activeIdx ? 1 : idx === activeIdx ? lineShare(karaoke, idx, t, totalSec) : 0;
+    const widths = rows.map((r) => ctx.measureText(r).width);
+    let filled = p * (widths.reduce((s, w) => s + w, 0) || 1);
+    ctx.globalAlpha = appear;
+    rows.forEach((row, r) => {
+      const baseline = y + r * rowH + fontSize * 0.9;
+      const fillW = Math.max(0, Math.min(widths[r], filled));
+      filled -= widths[r];
+      if (fillW < widths[r]) {
+        ctx.fillStyle = tx;
+        ctx.fillText(row, box.x, baseline);
+      }
+      if (fillW > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(box.x - 4, baseline - fontSize * 1.2, fillW + 4, fontSize * 1.6);
+        ctx.clip();
+        ctx.fillStyle = ac;
+        ctx.fillText(row, box.x, baseline);
+        ctx.restore();
+      }
+    });
+    y += rows.length * rowH + fontSize * 0.45;
+  });
+  ctx.globalAlpha = 1;
+}
+
+/** 9:16 (docs/video/vertical-v2.md): plate on top, the player's lyric column, vinyl with the title below. */
+function drawReelFrame(ctx: CanvasRenderingContext2D, karaoke: Karaoke, t: number, totalSec: number, assets: FrameAssets) {
+  const { height } = frameSize('reel');
+  const { x0, x1, y0, y1 } = safeBox('reel');
+  drawPlate(ctx, karaoke, x0, y0 + 16, 24);
+  const top = y0 + 101;
+  const bottom = y1 - 149;
+  const textX = x0 + PROGRESS_W + PROGRESS_GAP;
+  drawVerticalProgress(ctx, karaoke, x0, top, bottom, t / totalSec);
+  const textY = karaoke.style?.textY;
+  const anchor =
+    typeof textY === 'number'
+      ? Math.min(bottom - 160, Math.max(top + 40, (height * textY) / 100 - 60))
+      : top + (bottom - top) * 0.3;
+  drawLyrics(ctx, karaoke, t, totalSec, { x: textX, top, bottom, width: x1 - textX, anchor, fontSize: 45 });
+  drawVinylRow(ctx, karaoke, assets, x0, y1 - 69, 53, t, x1, 25, 19);
+}
+
+/** 16:9 «Пластинка+»: big vinyl with a tonearm on the left, the player's lyric column on the right. */
+function drawVinylFrame(ctx: CanvasRenderingContext2D, karaoke: Karaoke, t: number, totalSec: number, assets: FrameAssets, armK: number) {
+  const ac = karaoke.style?.activeColor || '#ffb547';
+  const tx = karaoke.style?.textColor || '#f4f4f5';
+  const bg = karaoke.style?.backgroundColor || '#1d1b3a';
+  const { x0, x1, y0, y1 } = safeBox('landscape');
+  drawPlate(ctx, karaoke, x0, y0, 19);
+  const r = 171;
+  const cx = x0 + r;
+  const cy = y0 + 64 + r;
+  drawVinyl(ctx, assets, cx, cy, r, t, ac, bg, 0.45);
+  drawTonearm(ctx, cx, cy, r, armK);
+  const barX = x0 + r * 2 + 93;
+  const infoW = barX - 24 - x0;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = tx;
+  ctx.font = '700 32px "Unbounded", "Onest", sans-serif';
+  ctx.fillText(fitText(ctx, karaoke.title, infoW), x0, cy + r + 51);
+  ctx.fillStyle = withAlpha(tx, 0.7);
+  ctx.font = '500 20px "Onest", sans-serif';
+  ctx.fillText(fitText(ctx, subtitle(karaoke, assets), infoW), x0, cy + r + 83);
+  const textX = barX + PROGRESS_W + PROGRESS_GAP;
+  drawVerticalProgress(ctx, karaoke, barX, y0, y1, t / totalSec);
+  drawLyrics(ctx, karaoke, t, totalSec, { x: textX, top: y0, bottom: y1, width: x1 - textX, anchor: y0 + (y1 - y0) * 0.32, fontSize: 45 });
+}
+
+/** 16:9 «Караоке-ТВ»: small vinyl with the title and the plate on top, two big lines in the middle. */
+function drawTvFrame(ctx: CanvasRenderingContext2D, karaoke: Karaoke, t: number, totalSec: number, assets: FrameAssets) {
+  const { x0, x1, y0, y1 } = safeBox('landscape');
+  const plateX = x1 - plateWidth(ctx, 19);
+  drawPlate(ctx, karaoke, plateX, y0 + 8, 19);
+  drawVinylRow(ctx, karaoke, assets, x0, y0 + 45, 45, t, plateX - 24, 27, 19);
+  const barX = x0 + 27;
+  const textX = barX + PROGRESS_W + PROGRESS_GAP;
+  const top = y0 + 133;
+  const bottom = y1 - 27;
+  drawVerticalProgress(ctx, karaoke, barX, top, bottom, t / totalSec);
+  drawLinePair(ctx, karaoke, t, totalSec, { x: textX, top, bottom, width: x1 - textX - 27, fontSize: 53 });
+}
+
+/**
+ * Draws the song frame at `t` seconds of the AUDIO. `armK` lowers the tonearm of «Пластинка+»
+ * (0 = resting, 1 = on the record).
  */
 export function drawKaraokeFrame(
   ctx: CanvasRenderingContext2D,
@@ -396,56 +632,96 @@ export function drawKaraokeFrame(
   format: ExportFormat,
   t: number,
   totalSec = karaoke.duration || 40,
-  assets: FrameAssets = { cover: null, author: karaoke.authorName }
+  assets: FrameAssets = { cover: null, author: karaoke.authorName },
+  armK = 1
 ) {
   const { width, height } = frameSize(format);
-  const ac = karaoke.style?.activeColor || '#ffb547';
-  const bg = karaoke.style?.backgroundColor || '#1d1b3a';
   ctx.globalAlpha = 1;
-  ctx.fillStyle = bg;
+  ctx.fillStyle = karaoke.style?.backgroundColor || '#1d1b3a';
   ctx.fillRect(0, 0, width, height);
-  const share = t / totalSec;
+  if (format === 'reel') drawReelFrame(ctx, karaoke, t, totalSec, assets);
+  else if (format === 'landscape-tv') drawTvFrame(ctx, karaoke, t, totalSec, assets);
+  else drawVinylFrame(ctx, karaoke, t, totalSec, assets, armK);
+}
 
-  if (format === 'reel') {
-    const pad = 48;
-    const thumb = 128;
-    const headTop = 64;
-    drawThumb(ctx, assets, pad, headTop, thumb, ac);
-    const infoX = pad + thumb + 24;
-    const infoBottom = drawInfo(ctx, karaoke, assets, infoX, headTop - 8, width - infoX - pad, 0.9);
-    const lyricsTop = Math.max(headTop + thumb, infoBottom) + 64;
-    const barY = height - 72;
-    const lyricsBottom = barY - 40;
-    const textY = karaoke.style?.textY;
-    const anchor =
-      typeof textY === 'number'
-        ? Math.min(lyricsBottom - 120, Math.max(lyricsTop + 40, (height * textY) / 100 - 60))
-        : lyricsTop + (lyricsBottom - lyricsTop) * 0.3;
-    drawLyrics(ctx, karaoke, t, totalSec, { x: pad, top: lyricsTop, bottom: lyricsBottom, width: width - pad * 2, anchor, fontSize: 52 });
-    drawProgress(ctx, karaoke, pad, barY, width - pad * 2, share);
-    return;
-  }
-
-  // 16:9
-  const pad = 64;
-  const disc = 300;
-  const colW = 340;
-  const discTop = 56;
-  drawVinyl(ctx, assets, pad + disc / 2, discTop + disc / 2, disc / 2, t, ac, bg);
-  drawInfo(ctx, karaoke, assets, pad, discTop + disc + 14, colW, 0.85);
-  const lyricsX = pad + colW + 72;
-  const barY = height - 44;
-  const lyricsTop = 40;
-  const lyricsBottom = barY - 28;
-  drawLyrics(ctx, karaoke, t, totalSec, {
-    x: lyricsX,
-    top: lyricsTop,
-    bottom: lyricsBottom,
-    width: width - lyricsX - pad,
-    anchor: lyricsTop + (lyricsBottom - lyricsTop) * 0.32,
-    fontSize: 46,
+/** Title card shown, without sound, before the song. */
+function drawIntroCard(ctx: CanvasRenderingContext2D, karaoke: Karaoke, format: ExportFormat, assets: FrameAssets) {
+  const { width, height } = frameSize(format);
+  const ac = karaoke.style?.activeColor || '#ffb547';
+  const tx = karaoke.style?.textColor || '#f4f4f5';
+  ctx.fillStyle = karaoke.style?.backgroundColor || '#1d1b3a';
+  ctx.fillRect(0, 0, width, height);
+  const reel = format === 'reel';
+  const size = 293;
+  const x = reel ? (width - size) / 2 : 293;
+  drawThumb(ctx, assets, x, reel ? 333 : 213, size, ac);
+  const textX = reel ? width / 2 : 640;
+  const maxW = reel ? width - 116 : width - 64 - textX;
+  ctx.textAlign = reel ? 'center' : 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = tx;
+  ctx.font = '700 60px "Unbounded", "Onest", sans-serif';
+  const all = wrapText(ctx, karaoke.title, maxW);
+  const rows = all.slice(0, 2);
+  if (all.length > 2) rows[1] = fitText(ctx, rows[1] + '…', maxW);
+  let y = reel ? 740 : 340 - (rows.length - 1) * 36;
+  rows.forEach((row) => {
+    ctx.fillText(row, textX, y);
+    y += 72;
   });
-  drawProgress(ctx, karaoke, pad, barY, width - pad * 2, share);
+  ctx.fillStyle = withAlpha(tx, 0.7);
+  ctx.font = '500 24px "Onest", sans-serif';
+  ctx.fillText(fitText(ctx, subtitle(karaoke, assets), maxW), textX, y - 22);
+}
+
+/** Closing card shown, without sound, after the song. */
+function drawOutroCard(ctx: CanvasRenderingContext2D, karaoke: Karaoke, format: ExportFormat, assets: FrameAssets) {
+  const { width, height } = frameSize(format);
+  const tx = karaoke.style?.textColor || '#f4f4f5';
+  ctx.fillStyle = karaoke.style?.backgroundColor || '#1d1b3a';
+  ctx.fillRect(0, 0, width, height);
+  const reel = format === 'reel';
+  const h = reel ? 48 : 29;
+  drawPlate(ctx, karaoke, (width - plateWidth(ctx, h)) / 2, reel ? 480 : 253, h);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = tx;
+  ctx.font = `700 ${reel ? 37 : 43}px "Unbounded", "Onest", sans-serif`;
+  ctx.fillText('Сделай своё караоке', width / 2, reel ? 667 : 400);
+  ctx.fillStyle = withAlpha(tx, 0.7);
+  ctx.font = '500 24px "Onest", sans-serif';
+  ctx.fillText(fitText(ctx, `Автор: ${assets.authorTag ?? assets.author}`, width - 116), width / 2, reel ? 717 : 451);
+}
+
+/** Total length of the exported video for a song of `audioSec` seconds. */
+export const videoLength = (audioSec: number) => INTRO_SEC + audioSec + OUTRO_SEC;
+
+/**
+ * One frame at `v` seconds of the VIDEO: INTRO_SEC of title card without sound, the song
+ * (audio time = v − INTRO_SEC), then OUTRO_SEC of closing card without sound.
+ */
+export function drawVideoFrame(
+  ctx: CanvasRenderingContext2D,
+  karaoke: Karaoke,
+  format: ExportFormat,
+  v: number,
+  audioSec: number,
+  assets: FrameAssets
+) {
+  const t = Math.min(audioSec, Math.max(0, v - INTRO_SEC));
+  drawKaraokeFrame(ctx, karaoke, format, t, audioSec, assets, clamp01((v - (INTRO_SEC - 0.9)) / 0.9));
+  if (v < INTRO_SEC) {
+    ctx.save();
+    ctx.globalAlpha = v < INTRO_SEC - 0.6 ? 1 : (INTRO_SEC - v) / 0.6;
+    drawIntroCard(ctx, karaoke, format, assets);
+    ctx.restore();
+  } else if (v > INTRO_SEC + audioSec) {
+    ctx.save();
+    ctx.globalAlpha = clamp01((v - INTRO_SEC - audioSec) / 0.4);
+    drawOutroCard(ctx, karaoke, format, assets);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
 }
 
 export interface RenderOptions {
@@ -533,14 +809,19 @@ async function renderFast(karaoke: Karaoke, format: ExportFormat, audioUrl: stri
 
   try {
     const duration = audio.duration;
+    // The intro and closing cards are silent: pad the song with silence on both sides.
+    const silence = (sec: number) =>
+      new AudioBuffer({ length: Math.max(1, Math.round(sec * audio.sampleRate)), numberOfChannels: audio.numberOfChannels, sampleRate: audio.sampleRate });
+    await sound.add(silence(INTRO_SEC));
     await sound.add(audio);
-    const frames = Math.ceil(duration * FPS);
+    await sound.add(silence(OUTRO_SEC));
+    const frames = Math.ceil(videoLength(duration) * FPS);
     let lastReport = 0;
     for (let i = 0; i < frames; i++) {
       if (signal?.aborted) throw abortError();
-      const t = i / FPS;
-      drawKaraokeFrame(ctx, karaoke, format, t, duration, assets);
-      await video.add(t, 1 / FPS);
+      const v = i / FPS;
+      drawVideoFrame(ctx, karaoke, format, v, duration, assets);
+      await video.add(v, 1 / FPS);
       if (i - lastReport >= FPS / 2) {
         lastReport = i;
         onProgress?.(i / frames);
@@ -640,21 +921,37 @@ async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: 
       resolve({ blob, ext: mimeType.startsWith('video/mp4') ? 'mp4' : 'webm', mode: 'realtime' });
     };
 
-    drawKaraokeFrame(ctx, karaoke, format, 0, duration, assets);
+    const total = videoLength(duration);
+    drawVideoFrame(ctx, karaoke, format, 0, duration, assets);
     recorder.start(1000);
-    if (trackAudio) void trackAudio.play().catch(() => onAbort());
-    else synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', 0);
 
+    // Intro card (silent) → the song → closing card (silent).
+    let songStartedAt = 0;
+    let songEndedAt = 0;
     let lastReport = 0;
     worker.onmessage = () => {
       const now = performance.now();
-      const t = trackAudio ? trackAudio.currentTime : (now - startTime) / 1000;
-      drawKaraokeFrame(ctx, karaoke, format, t, duration, assets);
+      if (!songStartedAt && now - startTime >= INTRO_SEC * 1000) {
+        songStartedAt = now;
+        if (trackAudio) void trackAudio.play().catch(() => onAbort());
+        else synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', 0);
+      }
+      let v: number;
+      if (!songStartedAt) v = (now - startTime) / 1000;
+      else if (!songEndedAt) {
+        const t = trackAudio ? trackAudio.currentTime : (now - songStartedAt) / 1000;
+        if (t >= duration || trackAudio?.ended) {
+          songEndedAt = now;
+          synthPlayer?.stop();
+        }
+        v = INTRO_SEC + Math.min(t, duration);
+      } else v = INTRO_SEC + duration + (now - songEndedAt) / 1000;
+      drawVideoFrame(ctx, karaoke, format, v, duration, assets);
       if (now - lastReport > 500) {
         lastReport = now;
-        onProgress?.(Math.min(0.99, t / duration));
+        onProgress?.(Math.min(0.99, v / total));
       }
-      if ((t >= duration || trackAudio?.ended) && recorder.state === 'recording') {
+      if (songEndedAt && now - songEndedAt >= OUTRO_SEC * 1000 && recorder.state === 'recording') {
         recordedMs = now - startTime;
         worker.onmessage = null;
         recorder.stop();
@@ -666,5 +963,6 @@ async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: 
 /** File name like "propose_vertical_1080p.mp4". */
 export function videoFileName(karaoke: Pick<Karaoke, 'title'>, format: ExportFormat, ext: string, quality: VideoQuality = '720p') {
   const base = karaoke.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'karaoke';
-  return `${base}_${format === 'reel' ? 'vertical' : 'horizontal'}_${quality}.${ext}`;
+  const kind = format === 'reel' ? 'vertical' : format === 'landscape-tv' ? 'horizontal_tv' : 'horizontal';
+  return `${base}_${kind}_${quality}.${ext}`;
 }

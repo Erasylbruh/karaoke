@@ -165,7 +165,7 @@ export interface DownloadRecord {
   karaokeId: string;
   title: string;
   artist: string;
-  format: 'reel' | 'landscape';
+  format: 'reel' | 'landscape' | 'landscape-tv';
   quality?: '480p' | '720p' | '1080p';
   /** Background colour of the project, for the card when the project has no cover. */
   color?: string;

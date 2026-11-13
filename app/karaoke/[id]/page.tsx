@@ -50,11 +50,11 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: Vide
   // The info column scrolls, so the list is positioned against the viewport instead of being clipped by it.
   const toggle = () => {
     const r = ref.current?.getBoundingClientRect();
-    // Opens upward when there is not enough room below the button (the list is ~330 px tall).
+    // Opens upward when there is not enough room below the button (the list is ~390 px tall).
     const below = r ? window.innerHeight - r.bottom : 0;
     setPos(
       r && window.innerWidth > 820
-        ? below > 340
+        ? below > 400
           ? { position: 'fixed', top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 250) }
           : { position: 'fixed', bottom: window.innerHeight - r.top + 6, left: Math.min(r.left, window.innerWidth - 250), top: 'auto' }
         : undefined
@@ -109,8 +109,12 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: Vide
             <span>Reels, Shorts, TikTok</span>
           </button>
           <button role="menuitem" onClick={() => pick('landscape')}>
-            <b>Горизонтальное 16:9</b>
-            <span>YouTube, презентации</span>
+            <b>Горизонтальное 16:9: пластинка</b>
+            <span>YouTube: пластинка и строки</span>
+          </button>
+          <button role="menuitem" onClick={() => pick('landscape-tv')}>
+            <b>Горизонтальное 16:9: караоке-ТВ</b>
+            <span>Две крупные строки для экрана</span>
           </button>
           <button
             role="menuitem"

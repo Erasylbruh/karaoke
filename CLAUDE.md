@@ -22,3 +22,4 @@
 - Branch `codex/localhost` tracks `origin/main`; Vercel rebuilds the site on every push to `main`.
 - `gh` is not installed; PRs are opened in the browser.
 - Docs: `docs/DEPLOY.md`, `docs/FIREBASE.md`.
+- Agreed but not yet built work is listed in `docs/NEXT_TASKS.md`; video export designs and their prototypes are in `docs/video/`.

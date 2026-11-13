@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вертикальное видео v2</title>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; padding: 16px; background: #18181b; color: #e4e4e7; font: 14px/1.5 "Onest", system-ui, sans-serif; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
+  button { font: inherit; color: inherit; background: #27272a; border: 1px solid #3f3f46; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  button.on { border-color: #a1a1aa; background: #3f3f46; }
+  .cv { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 360px)); gap: 16px; }
+  canvas { width: 100%; aspect-ratio: 9 / 16; border-radius: 12px; display: block; }
+  .cap { color: #a1a1aa; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<!--
+  Prototype of the 9:16 export, design v2 (see vertical-v2.md). Uses the real Bella Ciao lines,
+  timings and colours from Firestore; the cover is drawn procedurally. Open the file in a browser.
+-->
+<div class="row">
+  <span>Длина:</span>
+  <button data-f="chorus" class="on">Фрагмент, 30 с</button>
+  <button data-f="full">Вся песня</button>
+  <label><input type="checkbox" id="zn"> Зоны интерфейса</label>
+</div>
+<div class="row">
+  <button id="pp">Пауза</button>
+  <input type="range" id="sc" min="0" max="35" step="0.1" value="0" style="flex:1;min-width:160px">
+  <span id="tl" style="min-width:150px;text-align:right;font-variant-numeric:tabular-nums"></span>
+</div>
+<div class="cv">
+  <div><canvas id="a" width="540" height="960"></canvas><p class="cap">Сейчас</p></div>
+  <div><canvas id="b" width="540" height="960"></canvas><p class="cap">Новый, версия 2</p></div>
+</div>
+<script>
+const L = [[8,11,"Una mattina mi sono alzato"],[11.38,15,"O bella ciao, bella ciao, bella ciao, ciao, ciao"],[15.02,18.48,"Una mattina mi sono alzato"],[18.48,21.52,"E ho trovato l'invasor"],[21.94,25,"O partigiano, portami via"],[25.6,29.18,"O bella ciao, bella ciao, bella ciao, ciao, ciao"],[29.18,32,"O partigiano, portami via"],[32.8,36,"Ché mi sento di morir"],[43.38,46,"E se io muoio da partigiano"],[46.96,50,"O bella ciao, bella ciao, bella ciao, ciao, ciao"],[50.64,54.04,"E se io muoio da partigiano"],[54.22,57.14,"Tu mi devi seppellir"],[59.32,66.48,"E seppellire lassù in montagna"],[68.2,74,"O bella ciao, bella ciao, bella ciao, ciao, ciao"],[75.06,80,"E seppellire lassù in montagna"],[80,85,"Sotto l'ombra di un bel fior"],[97,100.06,"Tutte le genti che passeranno"],[100.06,103.32,"O bella ciao, bella ciao, bella ciao ciao ciao"],[103.32,105.99,"E le genti che passeranno"],[106.34,109,"Mi diranno: \"Che bel fior\""],[109.1,112,"E questo è il fiore del partigiano"],[112.18,115.36,"O bella ciao, bella ciao, bella ciao ciao ciao"],[115.36,118.36,"Questo è il fiore del partigiano"],[118.36,121,"Morto per la libertà"],[127.14,130,"E questo è il fiore del partigiano"],[130.38,133.26,"Morto per la libertà"]];
+const DUR = 135, BG = '#ece5da', TX = '#6e130d', AC = '#0c600b', W = 540, H = 960;
+const SF = { t: .12, b: .22, r: .15, l: .06 };          // safe zone shares of the frame
+const FR = { chorus: [21.5, 51.5], full: [0, 135] };    // audio range of the export
+const INTRO = 2.5, OUTRO = 2.5;                         // silent cards before / after the audio
+let v = 0, playing = true, frag = 'chorus', zones = false;
+const ca = document.getElementById('a').getContext('2d'), cb = document.getElementById('b').getContext('2d');
+const cl = (x, a, b) => Math.min(b, Math.max(a, x));
+
+function wrap(c, s, w) { const o = []; let cur = ''; for (const x of s.split(' ')) { const n = cur ? cur + ' ' + x : x; if (c.measureText(n).width > w && cur) { o.push(cur); cur = x } else cur = n } if (cur) o.push(cur); return o }
+function act(t) { let i = -1; L.forEach((l, k) => { if (t >= l[0]) i = k }); return i }
+function prog(i, t) { const l = L[i]; return cl((t - l[0]) / Math.max(.1, l[1] - l[0]), 0, 1) }
+function coverRaw(c, x, y, s) { ['#2f7d3c', '#efe7d8', '#b8322a'].forEach((k, i) => { c.fillStyle = k; c.fillRect(x + i * s / 3, y, s / 3 + 1, s) }); c.fillStyle = '#4a1c12'; c.textAlign = 'center'; c.font = '700 ' + s * .22 + 'px Unbounded'; c.fillText('Bella', x + s / 2, y + s * .48); c.fillText('Ciao', x + s / 2, y + s * .74) }
+function cover(c, x, y, s) { c.save(); c.beginPath(); c.roundRect(x, y, s, s, s * .12); c.clip(); coverRaw(c, x, y, s); c.restore() }
+function brand(c, x, y, h, ac, col) { const bw = h * .24, st = bw + h * .16; c.fillStyle = ac; [.6, 1, .8].forEach((k, i) => { c.beginPath(); c.roundRect(x + i * st, y + h * (1 - k), bw, h * k, bw / 2); c.fill() }); c.fillStyle = col; c.textAlign = 'left'; c.font = '600 ' + h * .78 + 'px Onest'; c.fillText('KaraokeCraft', x + st * 3 + h * .15, y + h * .9); return st * 3 + h * .15 + c.measureText('KaraokeCraft').width }
+function plate(c, x, y, h) { c.font = '600 ' + h * .78 + 'px Onest'; const w = h * .24 * 3 + h * .16 * 3 + h * .15 + c.measureText('KaraokeCraft').width + h * 1.5; c.fillStyle = TX; c.beginPath(); c.roundRect(x, y, w, h * 2, h); c.fill(); brand(c, x + h * .75, y + h * .5, h, BG, BG); return w }
+
+/** Same lyric column as the player in the browser (lib/video-render.ts drawLyrics). */
+function lyr(c, t, o) {
+  const { x, top, bot, w, anc, fs } = o, rh = fs * 1.15, gp = fs * .05;
+  c.font = '700 ' + fs + 'px Unbounded'; c.textAlign = 'left';
+  const bl = L.map(l => wrap(c, l[2], w)), tops = []; let acc = 0;
+  bl.forEach(b => { tops.push(acc); acc += b.length * rh + gp });
+  const a = act(t); let off = tops[0] - rh - gp;
+  if (a >= 0) { const fr = a > 0 ? tops[a - 1] : tops[0] - rh - gp, k = Math.min(1, (t - L[a][0]) / .35); off = fr + (tops[a] - fr) * (1 - Math.pow(1 - k, 3)) }
+  c.save(); c.beginPath(); c.rect(0, top, W, bot - top); c.clip(); const fd = (bot - top) * .12;
+  bl.forEach((rows, i) => {
+    const y0 = anc + tops[i] - off; if (y0 + rows.length * rh < top || y0 > bot) return;
+    let p = 0, al = .3; if (i < a) { p = 1; al = .6 } else if (i === a) { p = prog(i, t); al = 1 }
+    const ws = rows.map(r => c.measureText(r).width), tot = ws.reduce((s, q) => s + q, 0); let f = p * tot;
+    rows.forEach((r, j) => {
+      const rt = y0 + j * rh, y = rt + fs * .9, mid = rt + rh / 2;
+      c.globalAlpha = al * cl(Math.min(mid - top, bot - mid) / fd, 0, 1);
+      const fw = cl(f, 0, ws[j]); f -= ws[j];
+      if (fw < ws[j]) { c.fillStyle = TX; c.fillText(r, x, y) }
+      if (fw > 0) { c.save(); c.beginPath(); c.rect(x - 4, y - fs * 1.2, fw + 4, fs * 1.6); c.clip(); c.fillStyle = AC; c.fillText(r, x, y); c.restore() }
+    });
+  });
+  c.restore(); c.globalAlpha = 1;
+}
+function zonesDraw(c) { if (!zones) return; c.save(); c.fillStyle = 'rgba(226,75,74,.38)'; c.fillRect(0, 0, W, H * SF.t); c.fillRect(0, H * (1 - SF.b), W, H * SF.b); c.fillRect(W * (1 - SF.r), H * SF.t, W * SF.r, H * (1 - SF.t - SF.b)); c.restore() }
+
+function drawCurrent(c, t) {
+  c.globalAlpha = 1; c.fillStyle = BG; c.fillRect(0, 0, W, H); cover(c, 36, 48, 96);
+  const ix = 150; c.textAlign = 'left'; c.fillStyle = TX; c.font = '700 21px Unbounded'; c.fillText('Bella Ciao', ix, 70);
+  c.globalAlpha = .8; c.font = '500 15px Onest'; c.fillText('La Casa De Papel', ix, 96);
+  c.globalAlpha = .6; c.font = '500 13px Onest'; c.fillText('Автор:', ix, 118); c.globalAlpha = 1; c.font = '700 13px Onest'; c.fillText('Bomjourne', ix + 46, 118);
+  c.save(); c.globalAlpha = .7; brand(c, ix, 128, 15, AC, TX); c.restore();
+  lyr(c, t, { x: 36, top: 230, bot: 850, w: W - 72, anc: cl(H * .51 - 45, 260, 760), fs: 39 });
+  c.fillStyle = 'rgba(110,19,13,.25)'; c.beginPath(); c.roundRect(36, 906, W - 72, 5, 2.5); c.fill();
+  c.fillStyle = AC; c.beginPath(); c.roundRect(36, 906, Math.max(5, (W - 72) * t / DUR), 5, 2.5); c.fill(); zonesDraw(c);
+}
+
+function frameV2(c, t, share) {
+  c.globalAlpha = 1; c.fillStyle = BG; c.fillRect(0, 0, W, H);
+  const x0 = W * SF.l, x1 = W * (1 - SF.r), y0 = H * SF.t, y1 = H * (1 - SF.b);
+  plate(c, x0, y0 + 12, 18);                                            // KaraokeCraft plate
+  const top = y0 + 76, bot = y1 - 112, bx = x0, bw = 4, tx0 = bx + bw + 5; // progress 5 px left of the text
+  c.fillStyle = 'rgba(110,19,13,.16)'; c.beginPath(); c.roundRect(bx, top, bw, bot - top, 2); c.fill();
+  c.fillStyle = AC; c.beginPath(); c.roundRect(bx, top, bw, Math.max(4, (bot - top) * share), 2); c.fill();
+  lyr(c, t, { x: tx0, top, bot, w: x1 - tx0, anc: top + (bot - top) * .3, fs: 34 });
+  vinylRow(c, x0 + 40, y1 - 52, 40, t);
+}
+function vinyl(c, vx, vy, vr, t) {
+  c.fillStyle = '#121214'; c.beginPath(); c.arc(vx, vy, vr, 0, 7); c.fill();
+  c.strokeStyle = 'rgba(255,255,255,.06)'; for (let rr = vr * .62; rr < vr * .96; rr += 3) { c.beginPath(); c.arc(vx, vy, rr, 0, 7); c.stroke() }
+  c.save(); c.translate(vx, vy); c.rotate(t * 1.9); c.beginPath(); c.arc(0, 0, vr * .55, 0, 7); c.clip(); coverRaw(c, -vr * .55, -vr * .55, vr * 1.1); c.restore();
+  c.fillStyle = BG; c.beginPath(); c.arc(vx, vy, 2.5, 0, 7); c.fill();
+}
+function vinylRow(c, vx, vy, vr, t) {
+  vinyl(c, vx, vy, vr, t);
+  c.fillStyle = TX; c.textAlign = 'left'; c.font = '700 19px Unbounded'; c.fillText('Bella Ciao', vx + vr + 14, vy - 4);
+  c.globalAlpha = .7; c.font = '500 14px Onest'; c.fillText('La Casa De Papel · @bomjourne', vx + vr + 14, vy + 20); c.globalAlpha = 1;
+}
+function introCard(c) { c.fillStyle = BG; c.fillRect(0, 0, W, H); cover(c, W / 2 - 110, 250, 220); c.fillStyle = TX; c.textAlign = 'center'; c.font = '700 52px Unbounded'; c.fillText('Bella Ciao', W / 2, 560); c.globalAlpha *= .7; c.font = '500 19px Onest'; c.fillText('La Casa De Papel · @bomjourne', W / 2, 598) }
+function outroCard(c) { c.fillStyle = BG; c.fillRect(0, 0, W, H); c.font = '600 28px Onest'; const w = plate(c, 0, -999, 36); plate(c, W / 2 - w / 2, 360, 36); c.fillStyle = TX; c.textAlign = 'center'; c.font = '700 28px Unbounded'; c.fillText('Сделай своё караоке', W / 2, 500); c.globalAlpha *= .7; c.font = '500 18px Onest'; c.fillText('Автор: @bomjourne', W / 2, 538) }
+
+/** v is video time: INTRO s of silence with the intro card, the audio range, then OUTRO s with the final card. */
+function drawV2(c, v, s, e) {
+  const len = e - s, t = s + cl(v - INTRO, 0, len);
+  frameV2(c, t, cl((t - s) / len, 0, 1));
+  if (v < INTRO) { c.save(); c.globalAlpha = v < INTRO - .4 ? 1 : (INTRO - v) / .4; introCard(c); c.restore() }
+  if (v > INTRO + len) { c.save(); c.globalAlpha = cl((v - INTRO - len) / .4, 0, 1); outroCard(c); c.restore() }
+  zonesDraw(c);
+}
+
+const sc = document.getElementById('sc'), tl = document.getElementById('tl'), pp = document.getElementById('pp');
+const fm = x => Math.floor(x / 60) + ':' + String(Math.floor(x % 60)).padStart(2, '0');
+const total = () => INTRO + (FR[frag][1] - FR[frag][0]) + OUTRO;
+function setF(f) { frag = f; v = 0; sc.max = total(); sc.value = 0 }
+document.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { setF(b.dataset.f); document.querySelectorAll('[data-f]').forEach(x => x.classList.toggle('on', x === b)) });
+pp.onclick = () => { playing = !playing; pp.textContent = playing ? 'Пауза' : 'Играть' };
+sc.oninput = () => { v = +sc.value };
+document.getElementById('zn').onchange = e => { zones = e.target.checked };
+let last = performance.now(); setF('chorus');
+function loop(now) {
+  const dt = Math.min(.1, (now - last) / 1000); last = now; const [s, e] = FR[frag];
+  if (playing) { v += dt; if (v >= total()) v = 0; sc.value = v }
+  const phase = v < INTRO ? 'заставка, без звука' : v > INTRO + e - s ? 'финал, без звука' : 'аудио';
+  tl.textContent = fm(v) + ' / ' + fm(total()) + ' · ' + phase;
+  drawCurrent(ca, s + cl(v - INTRO, 0, e - s)); drawV2(cb, v, s, e);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

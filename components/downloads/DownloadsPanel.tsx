@@ -12,7 +12,7 @@ import { DownloadRecord } from '@/lib/types';
 /** How many projects the side panel shows; the full list is in Creator Studio. */
 export const PANEL_LIMIT = 6;
 
-const FORMAT_LABEL = { reel: '9:16', landscape: '16:9' } as const;
+const FORMAT_LABEL = { reel: '9:16', landscape: '16:9', 'landscape-tv': '16:9 ТВ' } as const;
 
 type Item =
   | { kind: 'job'; job: DownloadJob }
