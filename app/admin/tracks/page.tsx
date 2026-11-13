@@ -6,7 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
 import ProjectWarningDialog from '@/components/admin/ProjectWarningDialog';
 import { Karaoke } from '@/lib/types';
-import { getKaraokes, blockKaraoke, restoreKaraoke, softDeleteKaraoke, deleteKaraoke, getAuthor, RECOMMEND_THRESHOLD } from '@/lib/storage';
+import { getKaraokes, blockKaraoke, restoreKaraoke, softDeleteKaraoke, deleteKaraoke, getAuthor, RECOMMEND_THRESHOLD, hasInlineCover, moveCoverToStorage } from '@/lib/storage';
 import Tabs from '@/components/ui/Tabs';
 import ActionMenu from '@/components/ui/ActionMenu';
 
@@ -19,6 +19,7 @@ export default function AdminTracks() {
   const [query, setQuery] = useState('');
   const [warningTarget, setWarningTarget] = useState<Karaoke | null>(null);
   const [notice, setNotice] = useState('');
+  const [moving, setMoving] = useState<{ done: number; total: number } | null>(null);
 
   const items = user ? getKaraokes() : [];
   const q = query.trim().toLowerCase();
@@ -36,6 +37,31 @@ export default function AdminTracks() {
     });
 
   const count = (s: Tab) => items.filter((k) => k.status === s).length;
+  const inline = items.filter(hasInlineCover);
+
+  /** One-off move of covers stored inside track documents to Supabase Storage. */
+  const moveCovers = async () => {
+    const list = inline.map((k) => k.id);
+    let ok = 0;
+    let failed = 0;
+    setNotice('');
+    setMoving({ done: 0, total: list.length });
+    for (const id of list) {
+      try {
+        if (await moveCoverToStorage(id)) ok++;
+      } catch (e) {
+        failed++;
+        console.warn('[covers] could not move', id, e);
+      }
+      setMoving({ done: ok + failed, total: list.length });
+    }
+    setMoving(null);
+    setNotice(
+      failed
+        ? `Перенесено обложек: ${ok}. Не удалось: ${failed} — проверьте, что бакет Supabase принимает картинки (supabase/storage.sql).`
+        : `Перенесено обложек: ${ok}.`
+    );
+  };
 
   return (
     <>
@@ -62,6 +88,16 @@ export default function AdminTracks() {
         onChange={(e) => setQuery(e.target.value)}
         aria-label="Поиск треков"
       />
+      {inline.length > 0 && (
+        <div className="card row" style={{ marginBottom: 16, justifyContent: 'space-between', padding: 14 }}>
+          <span className="sm">
+            Обложек внутри записей треков: {inline.length}. Если перенести их в хранилище файлом, каталог будет открываться быстрее.
+          </span>
+          <button type="button" className="bt sm" disabled={!!moving} onClick={moveCovers}>
+            {moving ? `Переносим… ${moving.done} из ${moving.total}` : 'Перенести обложки'}
+          </button>
+        </div>
+      )}
       {notice && <p className="mb-4 text-sm" role="status">{notice}</p>}
 
       {rows.length === 0 ? (

@@ -22,6 +22,8 @@ import { alignLyrics, isAlignerOnline, localAccessState, LOCAL_ACCESS_HINT } fro
 import { useDownloads } from '@/context/DownloadsContext';
 import { compressAudio, needsCompression } from '@/lib/audio-compress';
 import Tutorial from '@/components/ui/Tutorial';
+import CoverCropModal from '@/components/karaoke/CoverCropModal';
+import { cropToBlob, looksLikeImage, openImageFile, saveCover, type CropRect } from '@/lib/cover';
 
 const STEPS = ['Аудио и информация', 'Текст и тайминг', 'Стиль', 'Доступ'] as const;
 
@@ -66,27 +68,6 @@ function parseLrc(text: string): Line[] {
   return out.map((l, i) => ({ ...l, end: out[i + 1] ? round1(Math.min(l.end, out[i + 1].time)) : l.end }));
 }
 
-/** Small JPEG so a cover fits comfortably in storage. */
-function fileToCover(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const size = 512;
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = size;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject(new Error('canvas'));
-      const side = Math.min(img.width, img.height);
-      ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/jpeg', 0.82));
-    };
-    img.onerror = () => reject(new Error('image'));
-    img.src = url;
-  });
-}
-
 /** `editId` switches the wizard to editing an existing karaoke of the signed-in author. */
 export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const router = useRouter();
@@ -105,6 +86,9 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
   const [coverImage, setCoverImage] = useState<string | undefined>();
+  /** Picked picture waiting in the crop window (object URL), and whether the crop is being saved. */
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
+  const [coverSaving, setCoverSaving] = useState(false);
 
   // Step 2
   const [rawText, setRawText] = useState('');
@@ -251,11 +235,30 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
 
   const handleCover = async (file?: File) => {
     if (!file) return;
-    if (!file.type.startsWith('image/')) return showToast('Для обложки нужно изображение');
+    if (!looksLikeImage(file)) return showToast('Для обложки нужно изображение: JPG, PNG или WebP');
     try {
-      setCoverImage(await fileToCover(file));
+      setCropSrc(await openImageFile(file));
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось открыть картинку');
+    }
+  };
+
+  const closeCrop = () => {
+    if (cropSrc) URL.revokeObjectURL(cropSrc);
+    setCropSrc(null);
+  };
+
+  const applyCrop = async (rect: CropRect) => {
+    if (!cropSrc) return;
+    setCoverSaving(true);
+    try {
+      setCoverImage(await saveCover(await cropToBlob(cropSrc, rect)));
+      closeCrop();
+      showToast('Обложка сохранена');
     } catch {
-      showToast('Не удалось прочитать изображение');
+      showToast('Не удалось сохранить обложку, попробуйте ещё раз');
+    } finally {
+      setCoverSaving(false);
     }
   };
 
@@ -594,6 +597,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
 
   return (
     <>
+      {cropSrc && <CoverCropModal src={cropSrc} busy={coverSaving} onCancel={closeCrop} onDone={applyCrop} />}
       <Tutorial
         page="create"
         steps={[
@@ -704,7 +708,15 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                         )}
                         <label className="bt sm" style={{ cursor: 'pointer' }}>
                           {coverImage ? 'Заменить' : 'Загрузить обложку'}
-                          <input type="file" hidden accept="image/*" onChange={(e) => handleCover(e.target.files?.[0])} />
+                          <input
+                            type="file"
+                            hidden
+                            accept="image/*,.heic,.heif"
+                            onChange={(e) => {
+                              handleCover(e.target.files?.[0]);
+                              e.target.value = '';
+                            }}
+                          />
                         </label>
                         {coverImage && <button className="bt sm gh" onClick={() => setCoverImage(undefined)}>Убрать</button>}
                       </div>

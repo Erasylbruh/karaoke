@@ -18,6 +18,7 @@ import {
   DownloadRecord,
 } from './types';
 import { cols, Col } from './store';
+import { uploadPublicFile } from './blob-store';
 
 const LOCAL_KEYS = {
   GUEST: 'karaokecraft_v2_guest',
@@ -165,6 +166,23 @@ export const restoreKaraoke = (id: string) => K.patch(id, { status: 'active' });
 
 export function deleteKaraoke(id: string): boolean {
   K.remove(id);
+  return true;
+}
+
+/** True when the cover is stored inside the track document (data URL) instead of as a file. */
+export const hasInlineCover = (k: Karaoke) => !!k.style?.coverImage?.startsWith('data:');
+
+/**
+ * Moves an inline cover to Supabase Storage and keeps only its URL on the track, so the catalog
+ * no longer downloads every picture with the track list. Throws when the upload is refused.
+ */
+export async function moveCoverToStorage(id: string): Promise<boolean> {
+  const k = K.get(id);
+  if (!k || !hasInlineCover(k)) return false;
+  const blob = await (await fetch(k.style.coverImage!)).blob();
+  const url = await uploadPublicFile(blob, 'covers');
+  const cur = K.get(id);
+  if (cur) K.patch(id, { style: { ...cur.style, coverImage: url } });
   return true;
 }
 

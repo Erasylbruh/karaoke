@@ -60,6 +60,16 @@ export function isBlobRef(ref?: string): ref is string {
   return !!ref && ref.startsWith(PREFIX);
 }
 
+/**
+ * Uploads to Supabase and returns the public URL; throws instead of falling back to this browser
+ * (for files that must be visible to everyone, like covers).
+ */
+export async function uploadPublicFile(file: Blob, folder: string): Promise<string> {
+  if (!supabaseConfigured) throw new Error('Supabase is not configured');
+  const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return uploadToSupabase(file, `${folder}/${auth.currentUser?.uid ?? 'anon'}/${name}`);
+}
+
 export async function putBlob(file: Blob, folder = 'uploads', onProgress?: UploadProgress): Promise<string> {
   const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   if (supabaseConfigured) {
