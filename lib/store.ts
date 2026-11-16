@@ -152,9 +152,12 @@ function mirror(c: Col<Doc>, source: Query | DocumentReference, onFirst?: () => 
     c.loaded = true;
     onFirst?.();
   };
+  // includeMetadataChanges: a first snapshot served from the local cache is followed by a
+  // metadata-only one once the server confirms it; without it `loaded` could stay false forever.
   if (source.type === 'document') {
     return onSnapshot(
       source as DocumentReference,
+      { includeMetadataChanges: true },
       (snap) => {
         if (snap.exists()) c.map.set(snap.id, { ...(snap.data() as Doc), id: snap.id });
         else c.map.delete(snap.id);
@@ -169,6 +172,7 @@ function mirror(c: Col<Doc>, source: Query | DocumentReference, onFirst?: () => 
   }
   return onSnapshot(
     source as Query,
+    { includeMetadataChanges: true },
     (snap) => {
       snap.docChanges().forEach((ch) => {
         if (ch.type === 'removed') c.map.delete(ch.doc.id);

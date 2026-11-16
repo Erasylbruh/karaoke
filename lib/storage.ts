@@ -421,6 +421,9 @@ const PRIVATE_KEYS = ['email', 'warnings', 'banReason'] as const;
 type PrivateUser = Pick<User, 'id' | (typeof PRIVATE_KEYS)[number]>;
 const UP = cols.userPrivate as Col<PrivateUser>;
 
+/** True once the signed-in person's private profile has been read (even if it doesn't exist). */
+export const privateProfileLoaded = () => UP.loaded;
+
 function withPrivate(u: User | undefined): User | undefined {
   if (!u) return u;
   const p = UP.get(u.id);

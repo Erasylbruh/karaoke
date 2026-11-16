@@ -8,11 +8,15 @@ import {
   signOut,
   sendEmailVerification,
   sendPasswordResetEmail,
+  verifyBeforeUpdateEmail,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
   type User as FirebaseUser,
 } from 'firebase/auth';
+import { useRouter } from 'next/navigation';
 import { auth } from '../lib/firebase';
 import { User } from '../lib/types';
-import { saveUser, getUserByUid, validateUsername, normalizeUsername, effectiveStatus } from '../lib/storage';
+import { saveUser, getUserByUid, validateUsername, normalizeUsername, effectiveStatus, privateProfileLoaded } from '../lib/storage';
 import { setSyncScope } from '../lib/store';
 import { useDataVersion } from '../components/DataProvider';
 
@@ -47,6 +51,11 @@ interface AuthContextType {
   refreshVerification: () => Promise<boolean>;
   /** Sends a letter with a link to set a new password. */
   resetPassword: (email: string) => Promise<AuthResult>;
+  /**
+   * Starts an email change: checks the current password, then Firebase sends a link to the new
+   * address; the email changes only once that link is opened.
+   */
+  changeEmail: (newEmail: string, password: string) => Promise<AuthResult>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -82,6 +91,8 @@ function authError(e: unknown): string {
   if (code.includes('operation-not-allowed') || code.includes('configuration-not-found'))
     return 'В Firebase Console не включён вход по email/паролю (Authentication → Sign-in method)';
   if (code.includes('too-many-requests')) return 'Слишком много попыток, попробуйте позже';
+  if (code.includes('requires-recent-login') || code.includes('user-token-expired'))
+    return 'Сессия устарела: выйдите и войдите снова, затем повторите';
   if (code.includes('unauthorized-continue-uri') || code.includes('unauthorized-domain'))
     return 'Домен сайта не добавлен в Firebase → Authentication → Settings → Authorized domains';
   return e instanceof Error ? e.message : 'Не удалось выполнить вход';
@@ -94,6 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [emailVerified, setEmailVerified] = useState(false);
   const [authPrompt, setAuthPrompt] = useState<{ open: boolean; reason?: string }>({ open: false });
   const version = useDataVersion();
+  const router = useRouter();
 
   useEffect(
     () =>
@@ -193,10 +205,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshVerification = async (): Promise<boolean> => {
     const account = auth.currentUser;
     if (!account) return false;
-    await account.reload().catch(() => undefined);
+    try {
+      await account.reload();
+    } catch (e) {
+      // After an email change Firebase ends the old session: sign in again with the new address.
+      if (String((e as { code?: string })?.code).includes('user-token-expired')) await signOut(auth);
+      return false;
+    }
     setEmailVerified(account.emailVerified);
+    setAuthEmail(account.email);
     return account.emailVerified;
   };
+
+  const changeEmail = async (newEmail: string, password: string): Promise<AuthResult> => {
+    const account = auth.currentUser;
+    const next = newEmail.trim();
+    if (!account?.email) return { ok: false, error: 'Нужно войти' };
+    if (!next.includes('@')) return { ok: false, error: 'Введите новый email' };
+    if (next.toLowerCase() === account.email.toLowerCase()) return { ok: false, error: 'Это и так ваш текущий email' };
+    if (!password) return { ok: false, error: 'Введите текущий пароль' };
+    try {
+      await reauthenticateWithCredential(account, EmailAuthProvider.credential(account.email, password));
+    } catch (e) {
+      const code = (e as { code?: string })?.code || '';
+      if (code.includes('wrong-password') || code.includes('invalid-credential')) return { ok: false, error: 'Неверный текущий пароль' };
+      return { ok: false, error: authError(e) };
+    }
+    try {
+      await verifyBeforeUpdateEmail(account, next, actionSettings('/login'));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: authError(e) };
+    }
+  };
+
+  // The private copy of the email (userPrivate) follows the sign-in email, e.g. after a change.
+  // The rules compare it with the token, so the token is refreshed first.
+  const storedEmail = user?.email;
+  const privateReady = privateProfileLoaded();
+  useEffect(() => {
+    if (!user || !authEmail || !privateReady) return;
+    if (storedEmail && storedEmail.toLowerCase() === authEmail.toLowerCase()) return;
+    let alive = true;
+    void auth.currentUser
+      ?.getIdToken(true)
+      .then(() => alive && saveUser({ ...user, email: authEmail }))
+      .catch(async (e) => {
+        console.warn('[auth] could not refresh the session for the new email', e);
+        // Firebase ends the old session once the email changed: sign in again with the new one.
+        const code = String((e as { code?: string })?.code);
+        if (code.includes('user-token-expired') || code.includes('invalid-user-token') || code.includes('user-disabled')) {
+          await signOut(auth);
+          router.push('/login?email-changed=1');
+        }
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, authEmail, storedEmail, privateReady]);
 
   const resetPassword = async (email: string): Promise<AuthResult> => {
     const e = email.trim();
@@ -242,6 +309,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         sendVerification,
         refreshVerification,
         resetPassword,
+        changeEmail,
       }}
     >
       {children}

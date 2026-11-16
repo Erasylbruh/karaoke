@@ -1,9 +1,20 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { Suspense, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
+
+/** Shown after an email change ended the old session (see AuthContext). */
+function EmailChangedNote() {
+  const params = useSearchParams();
+  if (!params.get('email-changed')) return null;
+  return (
+    <p className="card sm" role="status" style={{ marginBottom: 14 }}>
+      Почта изменена. Войдите с новой почтой и прежним паролем.
+    </p>
+  );
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -26,6 +37,9 @@ export default function LoginPage() {
   return (
     <div className="pg" style={{ maxWidth: 440, paddingTop: 56 }}>
       <h1 className="pg-h">Вход</h1>
+      <Suspense fallback={null}>
+        <EmailChangedNote />
+      </Suspense>
       <p className="pg-sub">Войдите, чтобы создавать караоке, собирать плейлисты и подписываться на авторов.</p>
 
       <form

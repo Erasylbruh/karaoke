@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { resetTutorials, validateUsername } from '@/lib/storage';
 import Tabs from '@/components/ui/Tabs';
+import ChangeEmailForm from '@/components/profile/ChangeEmailForm';
 
 type Tab = 'profile' | 'contacts' | 'account';
 
@@ -157,6 +158,7 @@ export default function StudioSettings() {
             </label>
             <button className="bt pr" type="submit" disabled={!!tagError || tag === user.username}>Сменить тег</button>
           </form>
+          <ChangeEmailForm />
           <div className="card">
             <p className="mu sm" style={{ marginTop: 0 }}>Обучающие подсказки на страницах можно показать снова.</p>
             <button
