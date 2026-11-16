@@ -6,6 +6,8 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
+  sendEmailVerification,
+  sendPasswordResetEmail,
   type User as FirebaseUser,
 } from 'firebase/auth';
 import { auth } from '../lib/firebase';
@@ -36,6 +38,15 @@ interface AuthContextType {
   register: (data: RegisterData) => Promise<AuthResult>;
   logout: () => void;
   updateProfile: (data: Partial<User>) => AuthResult;
+  /** Email of the signed-in account and whether its owner confirmed it by the link in the letter. */
+  authEmail: string | null;
+  emailVerified: boolean;
+  /** Sends the confirmation letter again. */
+  sendVerification: () => Promise<AuthResult>;
+  /** Re-reads the account after the person clicked the link; resolves to the new verified state. */
+  refreshVerification: () => Promise<boolean>;
+  /** Sends a letter with a link to set a new password. */
+  resetPassword: (email: string) => Promise<AuthResult>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -56,6 +67,11 @@ function banMessage(u: User): string | null {
   return null;
 }
 
+/** After the link in a letter, Firebase's page offers to go back to this address on the site. */
+function actionSettings(path: string) {
+  return typeof window === 'undefined' ? undefined : { url: window.location.origin + path };
+}
+
 function authError(e: unknown): string {
   const code = (e as { code?: string })?.code || '';
   if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found'))
@@ -66,12 +82,16 @@ function authError(e: unknown): string {
   if (code.includes('operation-not-allowed') || code.includes('configuration-not-found'))
     return 'В Firebase Console не включён вход по email/паролю (Authentication → Sign-in method)';
   if (code.includes('too-many-requests')) return 'Слишком много попыток, попробуйте позже';
+  if (code.includes('unauthorized-continue-uri') || code.includes('unauthorized-domain'))
+    return 'Домен сайта не добавлен в Firebase → Authentication → Settings → Authorized domains';
   return e instanceof Error ? e.message : 'Не удалось выполнить вход';
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authUid, setAuthUid] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [authEmail, setAuthEmail] = useState<string | null>(null);
+  const [emailVerified, setEmailVerified] = useState(false);
   const [authPrompt, setAuthPrompt] = useState<{ open: boolean; reason?: string }>({ open: false });
   const version = useDataVersion();
 
@@ -79,6 +99,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () =>
       onAuthStateChanged(auth, (fbUser) => {
         setAuthUid(fbUser?.uid ?? null);
+        setAuthEmail(fbUser?.email ?? null);
+        setEmailVerified(!!fbUser?.emailVerified);
         setAuthReady(true);
       }),
     []
@@ -145,6 +167,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         status: 'active',
         createdAt: new Date().toISOString(),
       });
+      // The letter is a bonus: a failure here must not undo a successful registration.
+      void sendEmailVerification(cred.user, actionSettings('/')).catch(() => undefined);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: authError(e) };
@@ -153,6 +177,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     void signOut(auth);
+  };
+
+  const sendVerification = async (): Promise<AuthResult> => {
+    const account = auth.currentUser;
+    if (!account) return { ok: false, error: 'Нужно войти' };
+    try {
+      await sendEmailVerification(account, actionSettings('/'));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: authError(e) };
+    }
+  };
+
+  const refreshVerification = async (): Promise<boolean> => {
+    const account = auth.currentUser;
+    if (!account) return false;
+    await account.reload().catch(() => undefined);
+    setEmailVerified(account.emailVerified);
+    return account.emailVerified;
+  };
+
+  const resetPassword = async (email: string): Promise<AuthResult> => {
+    const e = email.trim();
+    if (!e.includes('@')) return { ok: false, error: 'Введите email, с которым вы регистрировались' };
+    try {
+      await sendPasswordResetEmail(auth, e, actionSettings('/login'));
+      return { ok: true };
+    } catch (err) {
+      // Never tell whether an address is registered: that would let anyone check emails.
+      const code = (err as { code?: string })?.code || '';
+      if (code.includes('user-not-found')) return { ok: true };
+      return { ok: false, error: authError(err) };
+    }
   };
 
   const updateProfile = (data: Partial<User>): AuthResult => {
@@ -180,6 +237,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         register,
         logout,
         updateProfile,
+        authEmail,
+        emailVerified,
+        sendVerification,
+        refreshVerification,
+        resetPassword,
       }}
     >
       {children}

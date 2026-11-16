@@ -242,9 +242,13 @@ service cloud.firestore {
       }
     }
 
-    // Public app config (e.g. the auto-timing service address).
+    // Public site settings. `genres` (the list projects pick from) is edited by admins only.
+    // `aligner` is not writable here: the auto-timing service would need to sign in first.
     match /config/{id} {
       allow read: if true;
+      allow write: if id == 'genres' && isAdmin() &&
+        request.resource.data.keys().hasOnly(['id', 'list']) && request.resource.data.id == 'genres' &&
+        request.resource.data.list is list && request.resource.data.list.size() <= 200;
     }
   }
 }

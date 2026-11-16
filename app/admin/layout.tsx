@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Users, Music, ShieldCheck, BarChart3, Flag } from 'lucide-react';
+import { Users, Music, ShieldCheck, BarChart3, Flag, Tags } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
 import SideNav from '@/components/layout/SideNav';
@@ -54,7 +54,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <Tutorial
         page="admin"
         steps={[
-          { title: 'Панель модерации', text: 'Выберите раздел в боковой панели: пользователи, треки, жалобы, администраторы или аналитика.' },
+          { title: 'Панель модерации', text: 'Выберите раздел в боковой панели: пользователи, треки, жалобы, жанры, администраторы или аналитика.' },
           { title: 'Горизонтальные вкладки', text: 'Внутри раздела вкладки переключают статус: например, предупреждения и баны у пользователей.' },
           { title: 'Поиск', text: 'Пользователей ищите по нику или тегу (@admin), треки — по названию или автору.' },
         ]}
@@ -65,6 +65,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           { href: '/admin/users', label: 'Пользователи', icon: <Users {...ICON} /> },
           { href: '/admin/tracks', label: 'Треки', icon: <Music {...ICON} /> },
           { href: '/admin/reports', label: 'Жалобы', icon: <Flag {...ICON} /> },
+          { href: '/admin/genres', label: 'Жанры', icon: <Tags {...ICON} /> },
           { href: '/admin/admins', label: 'Админы', icon: <ShieldCheck {...ICON} /> },
           { href: '/admin/analytics', label: 'Аналитика', icon: <BarChart3 {...ICON} /> },
         ]}

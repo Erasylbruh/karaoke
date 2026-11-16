@@ -60,6 +60,7 @@ export default function LoginPage() {
         <button type="submit" className="bt pr" disabled={busy}>
           {busy ? 'Входим…' : 'Войти'}
         </button>
+        <Link href="/forgot" className="lk mu sm" style={{ alignSelf: 'center' }}>Забыли пароль?</Link>
       </form>
 
       <p className="mu sm" style={{ textAlign: 'center', marginTop: 18 }}>

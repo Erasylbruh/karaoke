@@ -130,6 +130,8 @@ export const cols = {
   comments: new Col<any>('comments'),
   playlists: new Col<any>('playlists'),
   follows: new Col<FollowDoc>('follows'),
+  /** Site settings: `genres` (the list projects pick from), `aligner` (auto-timing address). */
+  config: new Col<any>('config'),
   // Personal: only the signed-in person's documents (see setSyncScope).
   notifications: new Col<any>('notifications'),
   downloads: new Col<any>('downloads'),
@@ -140,7 +142,7 @@ export const cols = {
 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-const PUBLIC = [cols.karaokes, cols.users, cols.comments, cols.playlists, cols.follows];
+const PUBLIC = [cols.karaokes, cols.users, cols.comments, cols.playlists, cols.follows, cols.config];
 const PERSONAL = [cols.notifications, cols.downloads, cols.events, cols.likes, cols.userPrivate];
 
 /** Mirrors a query (or a single document) into `c`. Returns the unsubscribe function. */

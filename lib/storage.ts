@@ -186,6 +186,45 @@ export async function moveCoverToStorage(id: string): Promise<boolean> {
   return true;
 }
 
+// ---------------- GENRES ----------------
+
+/** Genres a project can have; used until an admin saves a list of their own (config/genres). */
+export const DEFAULT_GENRES = [
+  'поп', 'рок', 'инди', 'альтернатива', 'хип-хоп', 'рэп', 'р&б', 'соул', 'фанк', 'джаз', 'блюз',
+  'электроника', 'электропоп', 'синти-поп', 'хаус', 'техно', 'лоу-фай', 'метал', 'панк', 'фолк',
+  'народная', 'кантри', 'регги', 'латино', 'к-поп', 'джей-поп', 'аниме', 'саундтрек', 'мюзикл',
+  'классика', 'акустика', 'эстрада', 'шансон', 'диско', 'детская',
+];
+/** A project keeps at most this many genres. */
+export const MAX_GENRES = 6;
+
+const CFG = cols.config as Col<{ id: string; list?: string[] }>;
+
+/** Lowercase, no "#", spaces become dashes: genres are also URL parts (/tag/...). */
+export const normalizeGenre = (g: string) =>
+  g.trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-').slice(0, 30);
+
+export function getGenres(): string[] {
+  const list = CFG.get('genres')?.list;
+  return list?.length ? list : DEFAULT_GENRES;
+}
+
+/** Admin: replaces the genre list (normalized, without duplicates). */
+export function saveGenres(list: string[]) {
+  const clean = [...new Set(list.map(normalizeGenre).filter(Boolean))];
+  CFG.set({ id: 'genres', list: clean });
+  return clean;
+}
+
+/** How many active projects use each genre (for the admin list). */
+export function genreUsage(): Map<string, number> {
+  const m = new Map<string, number>();
+  K.all()
+    .filter((k) => k.status === 'active')
+    .forEach((k) => k.tags.forEach((t) => m.set(t, (m.get(t) || 0) + 1)));
+  return m;
+}
+
 // ---------------- NOTIFICATIONS ----------------
 
 export function notify(

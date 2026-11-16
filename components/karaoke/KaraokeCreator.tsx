@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Karaoke, LyricLine, Visibility } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
-import { saveKaraoke, updateKaraoke, getKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid } from '@/lib/storage';
+import { saveKaraoke, updateKaraoke, getKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid, getGenres, MAX_GENRES } from '@/lib/storage';
 import { isBlobRef, putBlob, resolveBlobUrl } from '@/lib/blob-store';
 import {
   DEFAULT_FONTS,
@@ -84,7 +84,8 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
   const [description, setDescription] = useState('');
-  const [tags, setTags] = useState('');
+  /** Genres picked from the admin-managed list (stored in `tags`). */
+  const [genres, setGenres] = useState<string[]>([]);
   const [coverImage, setCoverImage] = useState<string | undefined>();
   /** Picked picture waiting in the crop window (object URL), and whether the crop is being saved. */
   const [cropSrc, setCropSrc] = useState<string | null>(null);
@@ -144,7 +145,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     setTitle(k.title);
     setArtist(k.artist);
     setDescription(k.description || '');
-    setTags(k.tags.join(', '));
+    setGenres(k.tags.filter((t) => t !== 'караоке'));
     setCoverImage(k.style.coverImage);
     if (k.audioUrl) {
       setAudioRef(k.audioUrl);
@@ -464,11 +465,10 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     coverImage,
   };
 
-  const tagList = tags
-    .split(/[,\s]+/)
-    .map((t) => t.trim().toLowerCase().replace(/^#/, ''))
-    .filter(Boolean)
-    .slice(0, 6);
+  const tagList = genres.slice(0, MAX_GENRES);
+  const genreOptions = [...getGenres(), ...genres.filter((g) => !getGenres().includes(g))];
+  const toggleGenre = (g: string) =>
+    setGenres((cur) => (cur.includes(g) ? cur.filter((x) => x !== g) : cur.length >= MAX_GENRES ? cur : [...cur, g]));
 
   const handlePublish = () => {
     if (!user) return openAuthPrompt('Чтобы опубликовать караоке, войдите или зарегистрируйтесь.');
@@ -694,11 +694,29 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                       Описание (по желанию)
                       <textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
                     </label>
-                    <label className="fld">
-                      Теги
-                      <input type="text" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="поп, ночь, инди" />
-                      {tagList.length > 0 && <span className="sm">Будет сохранено: {tagList.map((t) => `#${t}`).join(' ')}</span>}
-                    </label>
+                    <div className="fld">
+                      <span>
+                        Жанры <span className="sm">· выбрано {genres.length} из {MAX_GENRES}</span>
+                      </span>
+                      <div className="chips" role="group" aria-label="Жанры проекта">
+                        {genreOptions.map((g) => {
+                          const on = genres.includes(g);
+                          return (
+                            <button
+                              key={g}
+                              type="button"
+                              className="chip"
+                              aria-pressed={on}
+                              disabled={!on && genres.length >= MAX_GENRES}
+                              onClick={() => toggleGenre(g)}
+                            >
+                              {g}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <span className="sm">Нет нужного жанра? Напишите администратору — он добавит его в список.</span>
+                    </div>
                     <div className="fld">
                       Обложка (по желанию)
                       <div className="row">

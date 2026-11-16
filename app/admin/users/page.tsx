@@ -36,7 +36,8 @@ export default function AdminUsers() {
   const rows = withStatus.filter(({ u, s }) => {
     if (tab !== 'all' && s !== tab) return false;
     if (!q) return true;
-    return u.username.toLowerCase().includes(q) || u.name.toLowerCase().includes(q);
+    const raw = query.trim().toLowerCase();
+    return u.username.toLowerCase().includes(q) || u.name.toLowerCase().includes(q) || (!!u.email && !!raw && u.email.toLowerCase().includes(raw));
   });
 
   const actionsFor = (u: User, s: UserStatus): ActionItem[] => {
@@ -83,7 +84,7 @@ export default function AdminUsers() {
         className="in"
         style={{ maxWidth: 360, marginBottom: 16 }}
         type="search"
-        placeholder="Поиск по нику или тегу (@liza_veter)"
+        placeholder="Поиск по имени, тегу или почте"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         aria-label="Поиск пользователей"
@@ -109,6 +110,12 @@ export default function AdminUsers() {
                         <div>
                           <Link href={`/u/${u.username}`} className="lk"><b>{u.name}</b></Link>
                           <small>@{u.username}{u.role === 'admin' && ' · админ'}</small>
+                          {/* Private: admins read every userPrivate document for moderation. */}
+                          {u.email ? (
+                            <a href={`mailto:${u.email}`} className="lk mu sm" style={{ display: 'block', overflowWrap: 'anywhere' }}>{u.email}</a>
+                          ) : (
+                            <small className="mu">почта не указана</small>
+                          )}
                         </div>
                       </div>
                     </td>

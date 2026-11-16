@@ -167,3 +167,13 @@ test('likes and playlists: own only', async () => {
   await assertFails(as('alice').doc('playlists/p1').update({ name: 'Hacked' }));
   await assertFails(as('alice').doc('playlists/p2').set({ id: 'p2', ownerId: 'bob', name: 'x', karaokeIds: [], createdAt: 'x' }));
 });
+
+test('genres: everyone reads the list, only admins change it', async () => {
+  await assertSucceeds(as('admin').doc('config/genres').set({ id: 'genres', list: ['поп', 'рок'] }));
+  await assertSucceeds(guest().doc('config/genres').get());
+  await assertFails(as('alice').doc('config/genres').set({ id: 'genres', list: ['spam'] }));
+  await assertFails(guest().doc('config/genres').set({ id: 'genres', list: ['spam'] }));
+  await assertFails(as('admin').doc('config/genres').set({ id: 'genres', list: ['поп'], extra: true }));
+  await assertFails(as('admin').doc('config/aligner').set({ url: 'https://evil.trycloudflare.com' }));
+  await assertFails(guest().doc('config/aligner').set({ url: 'https://evil.trycloudflare.com' }));
+});

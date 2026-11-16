@@ -10,6 +10,7 @@ import AuthPrompt from '@/components/ui/AuthPrompt';
 import DataProvider from '@/components/DataProvider';
 import { DownloadsProvider } from '@/context/DownloadsContext';
 import DownloadsPanel from '@/components/downloads/DownloadsPanel';
+import VerifyEmailBanner from '@/components/layout/VerifyEmailBanner';
 
 export const metadata: Metadata = {
   title: 'KaraokeCraft — караоке-анимации',
@@ -43,6 +44,7 @@ export default function RootLayout({
             <SiteChrome><Navbar /></SiteChrome>
           </Suspense>
           <main>
+            <VerifyEmailBanner />
             <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
               {children}
             </Suspense>

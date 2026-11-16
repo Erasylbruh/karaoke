@@ -21,6 +21,8 @@ export const db: Firestore = fresh
   : getFirestore(app);
 
 export const auth = getAuth(app);
+// Letters (email confirmation, password reset) come in Russian.
+auth.languageCode = 'ru';
 
 // Local testing against the Firebase emulators (Firestore :8080, Auth :9099), e.g. to check
 // firestore.rules with the real app: NEXT_PUBLIC_USE_EMULATORS=1 in .env.development.local.
