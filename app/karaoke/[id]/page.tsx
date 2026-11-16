@@ -322,7 +322,10 @@ function KaraokePlayerContent() {
     if (activeIdx >= 0 && linesRef.current[activeIdx]) {
       const line = lyrics[activeIdx];
       const end = line.end ?? lyrics[activeIdx + 1]?.time ?? duration;
-      const progress = Math.min(100, Math.max(0, ((currentTime - line.time) / Math.max(0.1, end - line.time)) * 100));
+      const progress =
+        karaoke.style?.fillAnimation === false
+          ? 100
+          : Math.min(100, Math.max(0, ((currentTime - line.time) / Math.max(0.1, end - line.time)) * 100));
       const span = linesRef.current[activeIdx]?.querySelector('span');
       if (span) (span as HTMLElement).style.setProperty('--w', `${progress}%`);
     }

@@ -104,6 +104,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const [textColor, setTextColor] = useState('#f4f4f5');
   const [backgroundColor, setBackgroundColor] = useState('#1d1b3a');
   const [fontSize, setFontSize] = useState(32);
+  const [fillAnimation, setFillAnimation] = useState(true);
   const [aspectRatio, setAspectRatio] = useState<'v' | 'h'>('v');
   const [textY, setTextY] = useState(50);
 
@@ -169,6 +170,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     setTextColor(k.style.textColor);
     setBackgroundColor(k.style.backgroundColor);
     setFontSize(k.style.fontSizePx || 32);
+    setFillAnimation(k.style.fillAnimation !== false);
     setAspectRatio(k.style.aspectRatio === '16:9' || k.style.aspectRatio === 'h' ? 'h' : 'v');
     setTextY(k.style.textY ?? 50);
     setVisibility(k.visibility);
@@ -461,6 +463,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     fontSize: 'md' as const,
     fontSizePx: fontSize,
     textY: Math.round(textY),
+    fillAnimation,
     aspectRatio: (aspectRatio === 'v' ? '9:16' : '16:9') as '9:16' | '16:9',
     coverImage,
   };
@@ -863,6 +866,22 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                     <label className="fld">Текст<input type="color" value={textColor} onChange={(e) => setTextColor(e.target.value)} className="in" style={{ height: 40, padding: 3 }} /></label>
                     <label className="fld">Фон<input type="color" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} className="in" style={{ height: 40, padding: 3 }} /></label>
                   </div>
+                  <label className="row sm" style={{ gap: 10, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={fillAnimation}
+                      onChange={(e) => setFillAnimation(e.target.checked)}
+                      style={{ accentColor: 'var(--ac)', width: 18, height: 18 }}
+                    />
+                    <span>
+                      Анимация заливки
+                      <span className="mu sm" style={{ display: 'block' }}>
+                        {fillAnimation
+                          ? 'Строка заливается цветом слева направо в такт песне'
+                          : 'Активная строка сразу целиком окрашивается в цвет заливки'}
+                      </span>
+                    </span>
+                  </label>
                   <label className="fld">
                     Размер текста ({fontSize}px)
                     <input type="range" min="20" max="56" value={fontSize} onChange={(e) => setFontSize(parseInt(e.target.value, 10))} style={{ accentColor: 'var(--ac)' }} />
@@ -925,7 +944,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
             <div className="pv">
               <div
                 ref={frameRef}
-                className={`fr ${aspectRatio}`}
+                className={`fr ${aspectRatio} ${fillAnimation ? 'wipe' : ''}`}
                 id="fr"
                 style={
                   {
@@ -963,7 +982,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                     <p className="pl">Здесь появится текст песни</p>
                   ) : (
                     previewLines.map((pl) => (
-                      <p key={pl.key} className={`pl ${pl.on ? 'on' : ''}`}>{pl.text}</p>
+                      <p key={pl.key} className={`pl ${pl.on ? 'on' : ''}`}><span>{pl.text}</span></p>
                     ))
                   )}
                 </div>

@@ -46,6 +46,11 @@ export interface KaraokeStyle {
   fontSizePx?: number;
   /** Vertical centre of the lyrics block inside the frame, in percent (0-100). */
   textY?: number;
+  /**
+   * false: the current line takes the fill colour at once, without filling left to right.
+   * Missing means true (animated fill), so older karaokes keep their look.
+   */
+  fillAnimation?: boolean;
   aspectRatio?: '9:16' | '16:9' | 'v' | 'h';
   coverIcon?: string;
   /** Cover uploaded by the author (data URL or blob ref). */

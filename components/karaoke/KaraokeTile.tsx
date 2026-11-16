@@ -53,7 +53,8 @@ function LyricsPreview({ karaoke, active }: { karaoke: Karaoke; active: boolean 
   });
   const cur = lines[idx];
   const end = cur.end ?? lines[idx + 1]?.time ?? cur.time + 4;
-  const pct = Math.min(100, Math.max(0, ((t - cur.time) / Math.max(0.1, end - cur.time)) * 100));
+  const pct =
+    karaoke.style?.fillAnimation === false ? 100 : Math.min(100, Math.max(0, ((t - cur.time) / Math.max(0.1, end - cur.time)) * 100));
   const visible = lines.slice(Math.max(0, idx - 1), idx + 2);
 
   return (

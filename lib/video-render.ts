@@ -335,9 +335,7 @@ function drawLyrics(
       p = 1;
       alpha = 0.6; // sung lines: fill colour, a bit transparent
     } else if (idx === activeIdx) {
-      const line = lyrics[idx];
-      const end = line.end ?? lyrics[idx + 1]?.time ?? totalSec;
-      p = Math.min(1, Math.max(0, (t - line.time) / Math.max(0.1, end - line.time)));
+      p = lineShare(karaoke, idx, t, totalSec);
       alpha = 1;
     }
     const total = b.widths.reduce((s, w) => s + w, 0) || 1;
@@ -493,6 +491,7 @@ function drawTonearm(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: n
 
 /** Share of line `idx` already sung at `t`. */
 function lineShare(karaoke: Karaoke, idx: number, t: number, totalSec: number) {
+  if (karaoke.style?.fillAnimation === false) return t >= karaoke.lyrics[idx].time ? 1 : 0;
   const line = karaoke.lyrics[idx];
   const end = line.end ?? karaoke.lyrics[idx + 1]?.time ?? totalSec;
   return clamp01((t - line.time) / Math.max(0.1, end - line.time));
