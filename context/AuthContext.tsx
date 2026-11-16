@@ -8,18 +8,10 @@ import {
   signOut,
   type User as FirebaseUser,
 } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
+import { auth } from '../lib/firebase';
 import { User } from '../lib/types';
-import {
-  saveUser,
-  getUserByUid,
-  getUserByEmail,
-  getUserByUsername,
-  validateUsername,
-  normalizeUsername,
-  effectiveStatus,
-} from '../lib/storage';
+import { saveUser, getUserByUid, validateUsername, normalizeUsername, effectiveStatus } from '../lib/storage';
+import { setSyncScope } from '../lib/store';
 import { useDataVersion } from '../components/DataProvider';
 
 export type AuthResult = { ok: true } | { ok: false; error: string };
@@ -67,7 +59,7 @@ function banMessage(u: User): string | null {
 function authError(e: unknown): string {
   const code = (e as { code?: string })?.code || '';
   if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found'))
-    return 'Неверный тег/email или пароль';
+    return 'Неверный email или пароль';
   if (code.includes('email-already-in-use')) return 'Этот email уже зарегистрирован';
   if (code.includes('weak-password')) return 'Пароль слишком простой: минимум 6 символов';
   if (code.includes('invalid-email')) return 'Некорректный email';
@@ -100,22 +92,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUid, version]);
 
-  /** Makes sure the signed-in account has a profile document linked by uid. */
-  const linkProfile = async (account: FirebaseUser): Promise<User | null> => {
-    const byUid = getUserByUid(account.uid);
-    if (byUid) return byUid;
-    const byEmail = account.email ? getUserByEmail(account.email) : undefined;
-    if (!byEmail || byEmail.uid) return null;
-    if (!account.emailVerified) throw new Error('Для входа со старым профилем подтвердите email или обратитесь к администратору.');
-    await updateDoc(doc(db, 'users', byEmail.id), { uid: account.uid });
-    return { ...byEmail, uid: account.uid };
-  };
+  // Personal data (notifications, downloads, likes, stats, private profile) is loaded only for
+  // the signed-in person; admins also get every profile's private data.
+  const isAdminRole = authUid ? getUserByUid(authUid)?.role === 'admin' : false;
+  useEffect(() => {
+    setSyncScope(authUid ? { uid: authUid, admin: isAdminRole } : null);
+  }, [authUid, isAdminRole]);
 
   const finishSignIn = async (account: FirebaseUser): Promise<AuthResult> => {
-    const profile = await linkProfile(account).catch(async (error) => {
-      await signOut(auth);
-      throw error;
-    });
+    const profile = getUserByUid(account.uid) ?? null;
     if (!profile) {
       await signOut(auth);
       return { ok: false, error: 'Профиль не найден. Зарегистрируйтесь заново' };
@@ -130,11 +115,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (identifier: string, password: string): Promise<AuthResult> => {
     const id = identifier.trim();
-    if (!id || !password) return { ok: false, error: 'Введите тег или email и пароль' };
-    const email = id.includes('@') && !id.startsWith('@') ? id : getUserByUsername(id)?.email;
-    if (!email) return { ok: false, error: 'Пользователь с таким тегом не найден' };
+    if (!id || !password) return { ok: false, error: 'Введите email и пароль' };
+    // Sign-in by tag would need everyone's email in public data, so it is email only.
+    if (!id.includes('@') || id.startsWith('@')) return { ok: false, error: 'Войдите по email: вход по тегу больше не поддерживается' };
     try {
-      const cred = await signInWithEmailAndPassword(auth, email, password);
+      const cred = await signInWithEmailAndPassword(auth, id, password);
       return await finishSignIn(cred.user);
     } catch (e) {
       return { ok: false, error: authError(e) };
@@ -145,7 +130,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const tag = normalizeUsername(data.username);
     const tagError = validateUsername(tag);
     if (tagError) return { ok: false, error: tagError };
-    if (getUserByEmail(data.email)) return { ok: false, error: 'Этот email уже зарегистрирован' };
     try {
       const cred = await createUserWithEmailAndPassword(auth, data.email.trim(), data.password);
       saveUser({
@@ -153,7 +137,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         uid: cred.user.uid,
         username: tag,
         name: data.name.trim(),
-        email: data.email.trim(),
+        // As Firebase stored it: the rules compare it with the token's email.
+        email: cred.user.email ?? data.email.trim(),
         avatar: DEFAULT_AVATAR,
         bio: '',
         role: 'user',

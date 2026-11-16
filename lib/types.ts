@@ -112,7 +112,8 @@ export interface User {
   /** Unique tag, lowercase, without "@" (e.g. liza_veter). */
   username: string;
   name: string;
-  email: string;
+  /** Private: stored in userPrivate/{id}, present only for the owner and admins. */
+  email?: string;
   avatar: string;
   bio?: string;
   contacts?: UserContacts;
@@ -135,8 +136,6 @@ export interface Playlist {
 }
 
 export type InteractionType = 'listen' | 'finish' | 'like' | 'playlist' | 'comment' | 'share';
-
-export type SortOption = 'recommended' | 'popular' | 'newest' | 'oldest';
 
 export type NotificationType = 'like' | 'comment' | 'reply' | 'playlist' | 'follow' | 'download' | 'warning' | 'ban';
 

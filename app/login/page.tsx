@@ -36,13 +36,14 @@ export default function LoginPage() {
         }}
       >
         <label className="fld">
-          Тег или email
+          Email
           <input
-            type="text"
-            placeholder="@liza_veter"
+            type="email"
+            placeholder="name@example.com"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
-            autoComplete="username"
+            autoComplete="email"
+            inputMode="email"
           />
         </label>
         <label className="fld">

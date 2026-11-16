@@ -17,7 +17,7 @@ import {
   StatType,
   DownloadRecord,
 } from './types';
-import { cols, Col } from './store';
+import { cols, Col, createOnce } from './store';
 import { uploadPublicFile } from './blob-store';
 
 const LOCAL_KEYS = {
@@ -229,11 +229,10 @@ function notifyAuthor(karaokeId: string, actorId: string, type: NotificationType
 
 // ---------------- DAILY STATS (charts) ----------------
 
+/** +1 on the author's chart for today. Atomic: the actor usually can't see the author's stats. */
 export function bumpStat(authorId: string, type: StatType, by = 1) {
   const day = today();
-  const id = `${authorId}_${type}_${day}`;
-  const cur = ST.get(id);
-  ST.set({ id, authorId, type, day, count: (cur?.count || 0) + by });
+  ST.upsertIncrement(`${authorId}_${type}_${day}`, { authorId, type, day, count: 0 }, 'count', by);
 }
 
 /** Counts per day for the last `days` days, oldest first. */
@@ -273,17 +272,22 @@ export function registerDownload(karaokeId: string, actorId: string) {
  * Each (actor, karaoke, type) counts once, and the author's own actions never count,
  * so the score can't be pumped by repeating the same action.
  */
-export function registerInteraction(karaokeId: string, actorId: string, type: InteractionType): number | null {
+const countedInteractions = new Set<string>();
+
+export function registerInteraction(karaokeId: string, actorId: string, type: InteractionType): void {
   const k = getKaraokeById(karaokeId);
-  if (!k || k.authorId === actorId || k.status !== 'active' || k.visibility !== 'public') return null;
-
+  if (!k || k.authorId === actorId || k.status !== 'active' || k.visibility !== 'public') return;
   const key = `${karaokeId}|${actorId}|${type}`;
-  if (cols.interactions.get(key)) return k.recommendationScore;
-  cols.interactions.set({ id: key, at: new Date().toISOString() });
-
-  const score = Math.min(100, k.recommendationScore + INTERACTION_WEIGHT[type]);
-  K.patch(karaokeId, { recommendationScore: score, isFeatured: k.isFeatured || score >= RECOMMEND_THRESHOLD });
-  return score;
+  if (countedInteractions.has(key)) return;
+  countedInteractions.add(key);
+  // The flag document is created once per (track, actor, type); only the call that created it scores.
+  void createOnce('interactions', key, { at: new Date().toISOString() }).then((created) => {
+    const cur = K.get(karaokeId);
+    if (!created || !cur) return;
+    const add = Math.min(100, cur.recommendationScore + INTERACTION_WEIGHT[type]) - cur.recommendationScore;
+    if (add > 0) K.increment(karaokeId, 'recommendationScore', add);
+    if (!cur.isFeatured && cur.recommendationScore + add >= RECOMMEND_THRESHOLD) K.patch(karaokeId, { isFeatured: true });
+  });
 }
 
 // ---------------- LIKES ----------------
@@ -296,8 +300,8 @@ export function toggleKaraokeLike(karaokeId: string, userId: string): { isLiked:
   const k = K.get(karaokeId);
   let count = k?.likesCount || 0;
   if (k) {
+    if (!(isLiked && count <= 0)) K.increment(karaokeId, 'likesCount', isLiked ? -1 : 1);
     count = Math.max(0, count + (isLiked ? -1 : 1));
-    K.patch(karaokeId, { likesCount: count });
     if (!isLiked) {
       registerInteraction(karaokeId, userId, 'like');
       notifyAuthor(karaokeId, userId, 'like', 'оценил(а)');
@@ -309,10 +313,6 @@ export function toggleKaraokeLike(karaokeId: string, userId: string): { isLiked:
 export function hasUserLiked(karaokeId: string, userId?: string): boolean {
   if (!userId) return false;
   return (cols.likes.get(userId)?.ids || []).includes(karaokeId);
-}
-
-export function getUserLikedKaraokeIds(userId: string): string[] {
-  return cols.likes.get(userId)?.ids || [];
 }
 
 // ---------------- COMMENTS ----------------
@@ -374,21 +374,43 @@ export function normalizeUsername(input: string): string {
   return input.trim().replace(/^@/, '').toLowerCase();
 }
 
+/**
+ * Email and moderation details live in `userPrivate/{id}`, readable only by the owner and admins;
+ * `users/{id}` is the public profile. Reads merge the two when the private part is available.
+ */
+const PRIVATE_KEYS = ['email', 'warnings', 'banReason'] as const;
+type PrivateUser = Pick<User, 'id' | (typeof PRIVATE_KEYS)[number]>;
+const UP = cols.userPrivate as Col<PrivateUser>;
+
+function withPrivate(u: User | undefined): User | undefined {
+  if (!u) return u;
+  const p = UP.get(u.id);
+  return p ? { ...u, ...p, id: u.id } : u;
+}
+
+/** Fields of `next` that differ from `cur` (removed ones as undefined). */
+function changed<T extends object>(cur: T, next: T): Partial<T> {
+  const out: Record<string, unknown> = {};
+  const a = cur as Record<string, unknown>;
+  const b = next as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (k !== 'id' && JSON.stringify(a[k]) !== JSON.stringify(b[k])) out[k] = b[k];
+  }
+  return out as Partial<T>;
+}
+
 export function getUsers(): User[] {
-  return U.all().sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
+  return U.all()
+    .map((u) => withPrivate(u)!)
+    .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
 }
 
 export function getUserById(id: string): User | undefined {
-  return U.get(id);
+  return withPrivate(U.get(id));
 }
 
 export function getUserByUid(authUid: string): User | undefined {
-  return U.get(authUid) ?? U.all().find((u) => u.uid === authUid);
-}
-
-export function getUserByEmail(email: string): User | undefined {
-  const e = email.trim().toLowerCase();
-  return U.all().find((u) => u.email.toLowerCase() === e);
+  return withPrivate(U.get(authUid) ?? U.all().find((u) => u.uid === authUid));
 }
 
 export function getUserByUsername(tag: string): User | undefined {
@@ -409,14 +431,50 @@ export function validateUsername(tag: string, exceptUserId?: string): string | n
   return null;
 }
 
+/** Saves a profile: public fields to `users`, email and moderation details to `userPrivate`. */
 export function saveUser(user: User): User {
-  U.set(user);
+  const pub = { ...user } as Record<string, unknown>;
+  const priv: Record<string, unknown> = { id: user.id };
+  for (const k of PRIVATE_KEYS) {
+    if (pub[k] !== undefined) priv[k] = pub[k];
+    delete pub[k];
+  }
+  const cur = U.get(user.id) as Record<string, unknown> | undefined;
+  if (!cur) U.set(pub as unknown as User);
+  else {
+    // A public profile that still carries old private fields loses them on the next save.
+    const diff = changed(cur, pub);
+    for (const k of PRIVATE_KEYS) if (k in cur) diff[k] = undefined;
+    if (Object.keys(diff).length) U.patch(user.id, diff as Partial<User>);
+  }
+  const curP = UP.get(user.id) as Record<string, unknown> | undefined;
+  if (!curP) {
+    if (Object.keys(priv).length > 1) UP.set(priv as unknown as PrivateUser);
+  } else {
+    const diff = changed(curP, priv);
+    if (Object.keys(diff).length) UP.patch(user.id, diff as Partial<PrivateUser>);
+  }
   return user;
 }
 
-export function deleteUser(id: string): boolean {
-  U.remove(id);
-  return true;
+/** Profiles whose public document still holds an email or moderation details. */
+export const usersWithPublicPrivateData = () =>
+  U.all().filter((u) => PRIVATE_KEYS.some((k) => (u as unknown as Record<string, unknown>)[k] !== undefined));
+
+/**
+ * One-off move (admin): copies email and moderation details of every profile into `userPrivate`
+ * and removes them from the public `users` documents. Returns how many profiles were cleaned.
+ */
+export function movePrivateUserData(): number {
+  const list = usersWithPublicPrivateData();
+  for (const u of list) saveUser({ ...u, ...(UP.get(u.id) ?? {}), ...pickPrivate(u) });
+  return list.length;
+}
+
+function pickPrivate(u: User): Partial<User> {
+  const out: Record<string, unknown> = {};
+  for (const k of PRIVATE_KEYS) if ((u as unknown as Record<string, unknown>)[k] !== undefined) out[k] = (u as unknown as Record<string, unknown>)[k];
+  return out as Partial<User>;
 }
 
 /** A temporary ban that has run out counts as active again. */

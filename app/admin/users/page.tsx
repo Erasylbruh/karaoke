@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { User, UserStatus } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
-import { getUsers, moderateUser, effectiveStatus, updateUserRole, normalizeUsername } from '@/lib/storage';
+import { getUsers, moderateUser, effectiveStatus, updateUserRole, normalizeUsername, usersWithPublicPrivateData, movePrivateUserData } from '@/lib/storage';
 import Tabs from '@/components/ui/Tabs';
 import ActionMenu, { ActionItem } from '@/components/ui/ActionMenu';
 import ModerationModal, { ModerationKind } from '@/components/admin/ModerationModal';
@@ -25,6 +25,7 @@ export default function AdminUsers() {
   const [tab, setTab] = useState<Tab>('all');
   const [query, setQuery] = useState('');
   const [modal, setModal] = useState<{ kind: ModerationKind; user: User } | null>(null);
+  const [moved, setMoved] = useState<number | null>(null);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const users = useMemo(() => getUsers(), [version]);
@@ -53,6 +54,18 @@ export default function AdminUsers() {
     <>
       <h1 className="pg-h">Пользователи</h1>
       <p className="pg-sub">Предупреждения, временные и перманентные блокировки.</p>
+
+      {usersWithPublicPrivateData().length > 0 && (
+        <div className="card row" style={{ marginBottom: 16, justifyContent: 'space-between', padding: 14 }}>
+          <span className="sm">
+            У {usersWithPublicPrivateData().length} профилей email и данные модерации всё ещё лежат в открытой части. Перенесите их в закрытую.
+          </span>
+          <button type="button" className="bt sm" onClick={() => setMoved(movePrivateUserData())}>
+            Скрыть личные данные
+          </button>
+        </div>
+      )}
+      {moved !== null && <p className="mb-4 text-sm" role="status">Перенесено профилей: {moved}.</p>}
 
       <Tabs<Tab>
         value={tab}

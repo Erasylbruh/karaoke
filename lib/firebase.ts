@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { initializeFirestore, getFirestore, Firestore } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
+import { initializeFirestore, getFirestore, connectFirestoreEmulator, Firestore } from 'firebase/firestore';
 
 // Web config is public by design (access is controlled by firestore.rules). Files live in Supabase Storage (lib/blob-store.ts).
 // Values can be overridden with NEXT_PUBLIC_FIREBASE_* in .env.local.
@@ -21,3 +21,10 @@ export const db: Firestore = fresh
   : getFirestore(app);
 
 export const auth = getAuth(app);
+
+// Local testing against the Firebase emulators (Firestore :8080, Auth :9099), e.g. to check
+// firestore.rules with the real app: NEXT_PUBLIC_USE_EMULATORS=1 in .env.development.local.
+if (fresh && process.env.NEXT_PUBLIC_USE_EMULATORS === '1') {
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+}
