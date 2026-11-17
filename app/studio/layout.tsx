@@ -11,12 +11,11 @@ const ICON = { width: 16, height: 16 };
 export default function StudioLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
 
-  // Keep the page in the tree while auth loads (hidden), so the route still renders a static shell.
   if (isLoading) {
     return (
       <div className="shell" aria-busy="true">
         <div />
-        <div className="main" style={{ visibility: 'hidden' }}>{children}</div>
+        <div className="main" />
       </div>
     );
   }

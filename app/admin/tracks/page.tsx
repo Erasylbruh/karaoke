@@ -114,7 +114,7 @@ export default function AdminTracks() {
                 return (
                   <tr key={k.id}>
                     <td>
-                      <Link href={`/karaoke/${k.id}`} className="lk"><b>{k.title}</b></Link>
+                      <Link href={`/karaoke/${encodeURIComponent(k.id)}`} className="lk"><b>{k.title}</b></Link>
                       <div className="mu sm">{k.artist}</div>
                     </td>
                     <td>

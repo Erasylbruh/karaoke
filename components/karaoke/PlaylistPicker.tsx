@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { createPlaylist, getPlaylists, togglePlaylistItem } from '@/lib/storage';
+import { pluralRu } from '@/lib/format';
 
 /** Popup: add a karaoke (own or someone else's) to one of the user's playlists. */
 export default function PlaylistPicker({
@@ -41,7 +42,9 @@ export default function PlaylistPicker({
                 }}
               >
                 <span>{p.name}</span>
-                <span className={has ? 'pill ok' : 'pill'}>{has ? 'Добавлено' : `${p.karaokeIds.length} трек.`}</span>
+                <span className={has ? 'pill ok' : 'pill'}>
+                  {has ? 'Добавлено' : pluralRu(p.karaokeIds.length, 'трек', 'трека', 'треков', true)}
+                </span>
               </button>
             );
           })}

@@ -102,6 +102,8 @@ pub fn similarity(a: &str, b: &str) -> f32 {
 
 const GAP: f32 = -0.4;
 const MIN_SIM: f32 = 0.5;
+pub const MAX_LYRIC_UNITS: usize = 4_000;
+const MAX_HEARD_UNITS: usize = 8_000;
 
 /// Aligns lyric words to heard words; returns for each lyric word the index of its heard word.
 fn align_words(lyric: &[String], heard: &[String]) -> Vec<Option<usize>> {
@@ -165,8 +167,9 @@ pub fn align(lines: &[String], heard: &[Heard], duration: f32) -> Vec<LineTiming
             }
         }
     }
+    words.truncate(MAX_LYRIC_UNITS);
     // Heard pieces are split the same way; a piece's time is shared among its units by length.
-    let heard: Vec<Heard> = heard
+    let mut heard: Vec<Heard> = heard
         .iter()
         .flat_map(|h| {
             let parts: Vec<String> = units(&h.text).into_iter().filter(|u| !normalize(u).is_empty()).collect();
@@ -183,6 +186,7 @@ pub fn align(lines: &[String], heard: &[Heard], duration: f32) -> Vec<LineTiming
                 .collect::<Vec<_>>()
         })
         .collect();
+    heard.truncate(MAX_HEARD_UNITS);
     let heard_norm: Vec<String> = heard.iter().map(|h| normalize(&h.text)).collect();
     let lyric_norm: Vec<String> = words.iter().map(|w| w.2.clone()).collect();
     let matches = align_words(&lyric_norm, &heard_norm);

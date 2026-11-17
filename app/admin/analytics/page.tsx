@@ -1,22 +1,21 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Karaoke, User } from '@/lib/types';
+import { useDataVersion } from '@/components/DataProvider';
 import { getKaraokes, getUsers, effectiveStatus } from '@/lib/storage';
 import Tabs from '@/components/ui/Tabs';
 
 type Tab = 'overview' | 'top' | 'new';
 
 export default function AdminAnalytics() {
+  const version = useDataVersion();
   const [tab, setTab] = useState<Tab>('overview');
-  const [karaokes, setKaraokes] = useState<Karaoke[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
 
-  useEffect(() => {
-    setKaraokes(getKaraokes().filter((k) => k.status === 'active'));
-    setUsers(getUsers());
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const karaokes = useMemo(() => getKaraokes().filter((k) => k.status === 'active'), [version]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const users = useMemo(() => getUsers(), [version]);
 
   const views = karaokes.reduce((s, k) => s + k.viewsCount, 0);
   const likes = karaokes.reduce((s, k) => s + k.likesCount, 0);
@@ -59,7 +58,7 @@ export default function AdminAnalytics() {
               {top.map((k, i) => (
                 <tr key={k.id}>
                   <td>{i + 1}</td>
-                  <td><Link href={`/karaoke/${k.id}`} className="lk"><b>{k.title}</b></Link> <span className="mu sm">{k.artist}</span></td>
+                  <td><Link href={`/karaoke/${encodeURIComponent(k.id)}`} className="lk"><b>{k.title}</b></Link> <span className="mu sm">{k.artist}</span></td>
                   <td>{k.viewsCount.toLocaleString('ru-RU')}</td>
                   <td>{k.likesCount.toLocaleString('ru-RU')}</td>
                 </tr>

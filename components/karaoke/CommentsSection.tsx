@@ -7,6 +7,7 @@ import { Comment } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
 import { getComments, addComment, deleteComment, togglePinComment, uid } from '@/lib/storage';
+import { safeMediaUrl } from '@/lib/format';
 
 const MAX_LENGTH = 1000;
 
@@ -104,7 +105,7 @@ export default function CommentsSection({
     return (
       <div id={`c-${c.id}`} className={`rv-item ${c.pinned ? 'pinned' : ''} ${highlightId === c.id ? 'hl' : ''}`}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={c.userAvatar} alt="" className="av" />
+        <img src={safeMediaUrl(c.userAvatar) || '/brand/karaokecraft-app-icon.svg'} alt="" className="av" />
         <div className="rv-body">
           {c.pinned && (
             <span className="rv-pin-label">

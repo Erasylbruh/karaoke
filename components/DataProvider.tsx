@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
-import { startSync, subscribeStore, getStoreVersion, syncErrors } from '@/lib/store';
+import { startSync, subscribeStore, getStoreVersion, connectionFailed } from '@/lib/store';
 
 /** Re-renders the caller whenever any Firestore collection changes. */
 export function useDataVersion() {
@@ -10,8 +10,6 @@ export function useDataVersion() {
 
 /**
  * Starts the Firestore sync and keeps the app hidden until the first snapshot arrived.
- * The tree stays mounted (hidden) while loading and is remounted once data is ready, so every
- * page's mount effects read real data.
  */
 export default function DataProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -29,13 +27,13 @@ export default function DataProvider({ children }: { children: React.ReactNode }
     <>
       {!ready && (
         <div className="pg" style={{ textAlign: 'center', paddingTop: 120 }}>
-          <p className="mu">Загрузка данных…</p>
+          <p className="mu">Загрузка каталога…</p>
         </div>
       )}
-      {ready && syncErrors.length > 0 && (
+      {ready && connectionFailed && (
         <div className="sync-err" role="alert">
-          <b>Нет связи с Firestore — данные не загружены, изменения не сохраняются.</b>{' '}
-          <span className="mu">{syncErrors[0]}. Создайте базу Firestore в Firebase Console и опубликуйте firestore.rules (docs/FIREBASE.md).</span>
+          <b>Нет соединения с сервером данных.</b>{' '}
+          <span className="mu">Проверьте подключение к интернету и обновите страницу — пока связь не восстановится, изменения могут не сохраняться.</span>
         </div>
       )}
       <div key={ready ? 'ready' : 'loading'} hidden={!ready}>

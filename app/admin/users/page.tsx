@@ -6,6 +6,7 @@ import { User, UserStatus } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
 import { getUsers, moderateUser, effectiveStatus, updateUserRole, normalizeUsername, usersWithPublicPrivateData, movePrivateUserData } from '@/lib/storage';
+import { pluralRu, safeMediaUrl } from '@/lib/format';
 import Tabs from '@/components/ui/Tabs';
 import ActionMenu, { ActionItem } from '@/components/ui/ActionMenu';
 import ModerationModal, { ModerationKind } from '@/components/admin/ModerationModal';
@@ -59,7 +60,7 @@ export default function AdminUsers() {
       {usersWithPublicPrivateData().length > 0 && (
         <div className="card row" style={{ marginBottom: 16, justifyContent: 'space-between', padding: 14 }}>
           <span className="sm">
-            У {usersWithPublicPrivateData().length} профилей email и данные модерации всё ещё лежат в открытой части. Перенесите их в закрытую.
+            У {pluralRu(usersWithPublicPrivateData().length, 'профиля', 'профилей', 'профилей', true)} email или скрытые контакты всё ещё лежат в открытой части. Перенесите их в закрытую.
           </span>
           <button type="button" className="bt sm" onClick={() => setMoved(movePrivateUserData())}>
             Скрыть личные данные
@@ -106,7 +107,7 @@ export default function AdminUsers() {
                     <td>
                       <div className="who">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={u.avatar} alt="" className="av" />
+                        <img src={safeMediaUrl(u.avatar) || '/brand/karaokecraft-app-icon.svg'} alt="" className="av" />
                         <div>
                           <Link href={`/u/${u.username}`} className="lk"><b>{u.name}</b></Link>
                           <small>@{u.username}{u.role === 'admin' && ' · админ'}</small>

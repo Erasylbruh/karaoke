@@ -1,29 +1,31 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useMemo } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
+import { useDataVersion } from '@/components/DataProvider';
 import { getAuthorStats, getKaraokesByAuthor, visibilityRating } from '@/lib/storage';
-import { Karaoke } from '@/lib/types';
 import Tutorial from '@/components/ui/Tutorial';
 
 const fmt = (n: number) => n.toLocaleString('ru-RU');
 
 export default function StudioOverview() {
   const { user } = useAuth();
-  const [stats, setStats] = useState({ tracks: 0, views: 0, likes: 0, followers: 0, featured: 0 });
-  const [recent, setRecent] = useState<Karaoke[]>([]);
+  const version = useDataVersion();
 
-  useEffect(() => {
-    if (!user) return;
-    setStats(getAuthorStats(user.id));
-    setRecent(
-      getKaraokesByAuthor(user.id)
-        .filter((k) => k.status === 'active')
-        .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
-        .slice(0, 5)
-    );
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stats = useMemo(() => (user ? getAuthorStats(user.id) : { tracks: 0, views: 0, likes: 0, followers: 0, featured: 0 }), [user, version]);
+  const recent = useMemo(
+    () =>
+      user
+        ? getKaraokesByAuthor(user.id)
+            .filter((k) => k.status === 'active')
+            .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
+            .slice(0, 5)
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [user, version]
+  );
 
   if (!user) return null;
 
@@ -64,7 +66,7 @@ export default function StudioOverview() {
             <tbody>
               {recent.map((k) => (
                 <tr key={k.id}>
-                  <td><Link href={`/edit/${k.id}`} className="lk"><b>{k.title}</b></Link> <span className="mu sm">{k.artist}</span></td>
+                  <td><Link href={`/edit/${encodeURIComponent(k.id)}`} className="lk"><b>{k.title}</b></Link> <span className="mu sm">{k.artist}</span></td>
                   <td>{fmt(k.viewsCount)}</td>
                   <td>{fmt(k.likesCount)}</td>
                   <td>

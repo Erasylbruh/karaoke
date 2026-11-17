@@ -4,12 +4,12 @@ import KaraokeCreator from '@/components/karaoke/KaraokeCreator';
 
 export const metadata: Metadata = {
   title: 'Создать караоке — KaraokeCraft',
-  description: 'Создайте свою караоке-анимацию в стиле Spotify Lyrics с настройкой цвета, шрифта, фона и таймингов.',
+  description: 'Создайте свою караоке-анимацию с синхронной подсветкой строк, настройкой шрифта, цветов и экспортом видео.',
 };
 
 export default function CreateKaraokePage() {
   return (
-    <div className="min-h-screen bg-[#08080d]">
+    <div style={{ minHeight: '100vh' }}>
       <KaraokeCreator />
     </div>
   );

@@ -1,18 +1,20 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { User } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
+import { useDataVersion } from '@/components/DataProvider';
 import { getUsers, updateUserRole, normalizeUsername } from '@/lib/storage';
+import { safeMediaUrl } from '@/lib/format';
 
 export default function AdminAdmins() {
   const { user: me } = useAuth();
-  const [admins, setAdmins] = useState<User[]>([]);
+  const version = useDataVersion();
   const [query, setQuery] = useState('');
 
-  const reload = useCallback(() => setAdmins(getUsers().filter((u) => u.role === 'admin')), []);
-  useEffect(reload, [reload]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const admins = useMemo(() => getUsers().filter((u) => u.role === 'admin'), [version]);
 
   const q = normalizeUsername(query);
   const rows = admins.filter((u) => !q || u.username.toLowerCase().includes(q) || u.name.toLowerCase().includes(q));
@@ -21,7 +23,6 @@ export default function AdminAdmins() {
     if (admins.length <= 1) return window.alert('Нельзя забрать права у последнего администратора');
     if (!window.confirm(`Забрать права администратора у @${u.username}?`)) return;
     updateUserRole(u.id, 'user');
-    reload();
   };
 
   return (
@@ -50,7 +51,7 @@ export default function AdminAdmins() {
                 <td>
                   <div className="who">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={u.avatar} alt="" className="av" />
+                    <img src={safeMediaUrl(u.avatar) || '/brand/karaokecraft-app-icon.svg'} alt="" className="av" />
                     <div>
                       <Link href={`/u/${u.username}`} className="lk"><b>{u.name}</b></Link>
                       <small>@{u.username}</small>

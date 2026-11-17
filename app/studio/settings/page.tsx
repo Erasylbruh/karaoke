@@ -1,16 +1,19 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { resetTutorials, validateUsername } from '@/lib/storage';
+import { uploadPublicFile } from '@/lib/blob-store';
+import { safeMediaUrl } from '@/lib/format';
+import { User } from '@/lib/types';
 import Tabs from '@/components/ui/Tabs';
 import ChangeEmailForm from '@/components/profile/ChangeEmailForm';
 
 type Tab = 'profile' | 'contacts' | 'account';
 
-/** Downscale an uploaded avatar so it stays small enough for storage. */
-function fileToAvatar(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
+/** Downscale an uploaded avatar and store it in Supabase Storage (falling back to JPEG data URL). */
+async function fileToAvatar(file: File): Promise<string> {
+  const { blob, dataUrl } = await new Promise<{ blob: Blob; dataUrl: string }>((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
@@ -22,39 +25,40 @@ function fileToAvatar(file: File): Promise<string> {
       const side = Math.min(img.width, img.height);
       ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
       URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
+      const fallback = canvas.toDataURL('image/jpeg', 0.85);
+      canvas.toBlob((b) => (b ? resolve({ blob: b, dataUrl: fallback }) : reject(new Error('blob'))), 'image/jpeg', 0.85);
     };
-    img.onerror = () => reject(new Error('image'));
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('image'));
+    };
     img.src = url;
   });
+  try {
+    return await uploadPublicFile(blob, 'covers');
+  } catch {
+    return dataUrl;
+  }
 }
 
 export default function StudioSettings() {
-  const { user, updateProfile } = useAuth();
-  const [tab, setTab] = useState<Tab>('profile');
-  const [name, setName] = useState('');
-  const [bio, setBio] = useState('');
-  const [avatar, setAvatar] = useState('');
-  const [discord, setDiscord] = useState('');
-  const [email, setEmail] = useState('');
-  const [social, setSocial] = useState('');
-  const [showEmail, setShowEmail] = useState(false);
-  const [tag, setTag] = useState('');
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
-  useEffect(() => {
-    if (!user) return;
-    setName(user.name);
-    setBio(user.bio || '');
-    setAvatar(user.avatar);
-    setDiscord(user.contacts?.discord || '');
-    setEmail(user.contacts?.email || '');
-    setSocial(user.contacts?.social || '');
-    setShowEmail(!!user.contacts?.showEmail);
-    setTag(user.username);
-  }, [user]);
-
+  const { user } = useAuth();
   if (!user) return null;
+  return <StudioSettingsForm key={user.id} user={user} />;
+}
+
+function StudioSettingsForm({ user }: { user: User }) {
+  const { updateProfile } = useAuth();
+  const [tab, setTab] = useState<Tab>('profile');
+  const [name, setName] = useState(user.name);
+  const [bio, setBio] = useState(user.bio || '');
+  const [avatar, setAvatar] = useState(user.avatar);
+  const [discord, setDiscord] = useState(user.contacts?.discord || '');
+  const [email, setEmail] = useState(user.contacts?.email || '');
+  const [social, setSocial] = useState(user.contacts?.social || '');
+  const [showEmail, setShowEmail] = useState(!!user.contacts?.showEmail);
+  const [tag, setTag] = useState(user.username);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const flash = (ok: boolean, text: string) => {
     setMsg({ ok, text });
@@ -96,7 +100,7 @@ export default function StudioSettings() {
         >
           <div className="row">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={avatar} alt="" className="av lg" />
+            <img src={safeMediaUrl(avatar) || '/brand/karaokecraft-app-icon.svg'} alt="" className="av lg" />
             <label className="bt sm" style={{ cursor: 'pointer' }}>
               Загрузить фото
               <input

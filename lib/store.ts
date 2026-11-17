@@ -1,13 +1,11 @@
 /**
  * Synchronous cache over Firestore.
  *
- * Public collections (tracks, public profiles, reviews, playlists, follows) are mirrored in memory
- * for everyone. Personal ones (notifications, downloads, likes, author stats, private profile
- * data) are mirrored only for the signed-in person, through queries limited to their own
- * documents (see setSyncScope), so firestore.rules can keep them private.
- *
- * lib/storage.ts keeps its synchronous API: reads come from the cache, writes update the cache
- * immediately and are sent to Firestore in the background.
+ * Public collections (active public tracks, public profiles, reviews, playlists, follows) are
+ * mirrored in memory for everyone. Personal ones (author's own non-public tracks, notifications,
+ * downloads, likes, author stats, private profile data) are mirrored only for the signed-in person,
+ * through queries limited to their own documents (see setSyncScope), so firestore.rules can keep
+ * them private.
  */
 import {
   collection,
@@ -32,7 +30,7 @@ type Listener = () => void;
 const listeners = new Set<Listener>();
 let version = 0;
 
-function emit() {
+export function emitStore() {
   version++;
   listeners.forEach((l) => l());
 }
@@ -44,11 +42,14 @@ export function subscribeStore(l: Listener) {
 export const getStoreVersion = () => version;
 
 export const syncErrors: string[] = [];
-function report(where: string, e: unknown) {
-  const msg = `${where}: ${e instanceof Error ? e.message : String(e)}`;
+export let connectionFailed = false;
+
+function report(whereKey: string, e: unknown, isConnection = false) {
+  const msg = `${whereKey}: ${e instanceof Error ? e.message : String(e)}`;
   console.warn('[firestore]', msg);
   syncErrors.push(msg);
-  emit();
+  if (isConnection) connectionFailed = true;
+  emitStore();
 }
 
 /** Firestore value for a field: `undefined` removes it. */
@@ -66,11 +67,14 @@ export class Col<T extends Doc> {
   get(id: string): T | undefined {
     return this.map.get(id);
   }
-  /** Writes the whole document (creates it or replaces it). */
-  set(item: T) {
+  /** Writes the whole document (creates it or replaces it). Returns a promise for callers that await durability. */
+  set(item: T): Promise<void> {
     this.map.set(item.id, item);
-    emit();
-    setDoc(doc(db, this.name, item.id), item).catch((e) => report(`write ${this.name}/${item.id}`, e));
+    emitStore();
+    return setDoc(doc(db, this.name, item.id), item).catch((e) => {
+      report(`write ${this.name}/${item.id}`, e);
+      throw e;
+    });
   }
   /**
    * Changes only the given fields (`undefined` deletes a field), so a stale cache can't overwrite
@@ -82,8 +86,10 @@ export class Col<T extends Doc> {
     const next = { ...cur, ...partial };
     for (const [k, v] of Object.entries(partial)) if (v === undefined) delete (next as Record<string, unknown>)[k];
     this.map.set(id, next);
-    emit();
-    updateDoc(doc(db, this.name, id), toFirestore(partial as Record<string, unknown>)).catch((e) => report(`update ${this.name}/${id}`, e));
+    emitStore();
+    updateDoc(doc(db, this.name, id), toFirestore(partial as Record<string, unknown>)).catch((e) =>
+      report(`update ${this.name}/${id}`, e)
+    );
     return next;
   }
   /** Atomic +by on a numeric field, so two people acting at once can't overwrite each other. */
@@ -91,7 +97,7 @@ export class Col<T extends Doc> {
     const cur = this.map.get(id);
     if (!cur) return;
     this.map.set(id, { ...cur, [field]: (Number(cur[field]) || 0) + by });
-    emit();
+    emitStore();
     updateDoc(doc(db, this.name, id), { [field]: increment(by) }).catch((e) => report(`increment ${this.name}/${id}`, e));
   }
   /**
@@ -102,7 +108,7 @@ export class Col<T extends Doc> {
     const cur = this.map.get(id);
     if (cur) {
       this.map.set(id, { ...cur, [field]: (Number(cur[field]) || 0) + by });
-      emit();
+      emitStore();
     }
     setDoc(doc(db, this.name, id), { id, ...base, [field]: increment(by) }, { merge: true }).catch((e) =>
       report(`increment ${this.name}/${id}`, e)
@@ -110,7 +116,7 @@ export class Col<T extends Doc> {
   }
   remove(id: string) {
     this.map.delete(id);
-    emit();
+    emitStore();
     deleteDoc(doc(db, this.name, id)).catch((e) => report(`delete ${this.name}/${id}`, e));
   }
   clear() {
@@ -124,8 +130,12 @@ export interface LikeDoc { id: string; ids: string[] }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const cols = {
-  // Public: everyone mirrors the whole collection.
+  // Public catalog: only active public tracks are mirrored to every visitor.
   karaokes: new Col<any>('karaokes'),
+  // Scoped tracks: the signed-in author's own tracks (including private/unlisted), or all tracks for admins.
+  scopedKaraokes: new Col<any>('karaokes'),
+  // Single tracks opened by direct link (e.g. unlisted tracks).
+  directKaraokes: new Map<string, any>(),
   users: new Col<any>('users'),
   comments: new Col<any>('comments'),
   playlists: new Col<any>('playlists'),
@@ -142,18 +152,27 @@ export const cols = {
 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-const PUBLIC = [cols.karaokes, cols.users, cols.comments, cols.playlists, cols.follows, cols.config];
-const PERSONAL = [cols.notifications, cols.downloads, cols.events, cols.likes, cols.userPrivate];
+const PUBLIC_SOURCES: Array<{ col: Col<Doc>; source: () => Query }> = [
+  {
+    col: cols.karaokes as Col<Doc>,
+    source: () => query(collection(db, 'karaokes'), where('status', '==', 'active'), where('visibility', '==', 'public')),
+  },
+  { col: cols.users as Col<Doc>, source: () => collection(db, 'users') },
+  { col: cols.comments as Col<Doc>, source: () => collection(db, 'comments') },
+  { col: cols.playlists as Col<Doc>, source: () => collection(db, 'playlists') },
+  { col: cols.follows as Col<Doc>, source: () => collection(db, 'follows') },
+  { col: cols.config as Col<Doc>, source: () => collection(db, 'config') },
+];
+
+const PERSONAL = [cols.scopedKaraokes, cols.notifications, cols.downloads, cols.events, cols.likes, cols.userPrivate];
 
 /** Mirrors a query (or a single document) into `c`. Returns the unsubscribe function. */
-function mirror(c: Col<Doc>, source: Query | DocumentReference, onFirst?: () => void) {
+function mirror(c: Col<Doc>, source: Query | DocumentReference, onFirst?: () => void, isPublicBoot = false) {
   const first = () => {
     if (c.loaded) return;
     c.loaded = true;
     onFirst?.();
   };
-  // includeMetadataChanges: a first snapshot served from the local cache is followed by a
-  // metadata-only one once the server confirms it; without it `loaded` could stay false forever.
   if (source.type === 'document') {
     return onSnapshot(
       source as DocumentReference,
@@ -161,11 +180,14 @@ function mirror(c: Col<Doc>, source: Query | DocumentReference, onFirst?: () => 
       (snap) => {
         if (snap.exists()) c.map.set(snap.id, { ...(snap.data() as Doc), id: snap.id });
         else c.map.delete(snap.id);
-        if (!snap.metadata.fromCache) first();
-        emit();
+        if (!snap.metadata.fromCache) {
+          connectionFailed = false;
+          first();
+        }
+        emitStore();
       },
       (e) => {
-        report(`listen ${c.name}`, e);
+        report(`listen ${c.name}`, e, isPublicBoot);
         first();
       }
     );
@@ -178,12 +200,14 @@ function mirror(c: Col<Doc>, source: Query | DocumentReference, onFirst?: () => 
         if (ch.type === 'removed') c.map.delete(ch.doc.id);
         else c.map.set(ch.doc.id, { ...(ch.doc.data() as Doc), id: ch.doc.id });
       });
-      // A cached (offline) snapshot does not prove the server answered.
-      if (!snap.metadata.fromCache) first();
-      emit();
+      if (!snap.metadata.fromCache) {
+        connectionFailed = false;
+        first();
+      }
+      emitStore();
     },
     (e) => {
-      report(`listen ${c.name}`, e);
+      report(`listen ${c.name}`, e, isPublicBoot);
       first();
     }
   );
@@ -195,23 +219,28 @@ let started: Promise<void> | null = null;
 export function startSync(): Promise<void> {
   if (started) return started;
   started = new Promise<void>((resolve) => {
-    let pending = PUBLIC.length;
+    let pending = PUBLIC_SOURCES.length;
     let finished = false;
     const finish = () => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      emit();
+      emitStore();
       resolve();
     };
     const timer = setTimeout(() => {
-      report('connect', 'Firestore не ответил за 12 секунд');
+      report('connect', 'Сервер долго не отвечает', true);
       finish();
     }, 12000);
-    PUBLIC.forEach((c) =>
-      mirror(c as Col<Doc>, collection(db, c.name), () => {
-        if (--pending === 0) finish();
-      })
+    PUBLIC_SOURCES.forEach(({ col, source }) =>
+      mirror(
+        col,
+        source(),
+        () => {
+          if (--pending === 0) finish();
+        },
+        true
+      )
     );
   });
   return started;
@@ -222,7 +251,7 @@ let scopedUnsubs: (() => void)[] = [];
 
 /**
  * Switches the personal listeners to the signed-in person (null = signed out). Each one asks only
- * for that person's documents; admins also get every profile's private data for moderation.
+ * for that person's documents; admins also get all tracks and every profile's private data.
  */
 export function setSyncScope(scope: { uid: string; admin: boolean } | null) {
   const key = scope ? `${scope.uid}|${scope.admin}` : '';
@@ -231,11 +260,14 @@ export function setSyncScope(scope: { uid: string; admin: boolean } | null) {
   scopedUnsubs.forEach((u) => u());
   scopedUnsubs = [];
   PERSONAL.forEach((c) => c.clear());
-  emit();
+  emitStore();
   if (!scope) return;
   const { uid, admin } = scope;
   const mine = (c: Col<Doc>, field: string) => mirror(c, query(collection(db, c.name), where(field, '==', uid)));
   scopedUnsubs = [
+    admin
+      ? mirror(cols.scopedKaraokes as Col<Doc>, collection(db, 'karaokes'))
+      : mine(cols.scopedKaraokes as Col<Doc>, 'authorId'),
     mine(cols.notifications as Col<Doc>, 'userId'),
     mine(cols.downloads as Col<Doc>, 'userId'),
     mine(cols.events as Col<Doc>, 'authorId'),
@@ -244,6 +276,24 @@ export function setSyncScope(scope: { uid: string; admin: boolean } | null) {
       ? mirror(cols.userPrivate as Col<Doc>, collection(db, 'userPrivate'))
       : mirror(cols.userPrivate as Col<Doc>, doc(db, 'userPrivate', uid)),
   ];
+}
+
+/** Fetches a single karaoke document by ID (e.g. an unlisted track opened by direct link). */
+export async function fetchSingleKaraoke<T extends Doc>(id: string): Promise<T | undefined> {
+  if (!id) return undefined;
+  try {
+    const snap = await getDoc(doc(db, 'karaokes', id));
+    if (!snap.exists()) {
+      cols.directKaraokes.delete(id);
+      return undefined;
+    }
+    const item = { ...(snap.data() as T), id: snap.id };
+    cols.directKaraokes.set(snap.id, item);
+    emitStore();
+    return item;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

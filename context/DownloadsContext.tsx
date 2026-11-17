@@ -79,7 +79,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     running.current = true;
     const ctrl = new AbortController();
     controllers.current.set(next.id, ctrl);
-    patch(next.id, { status: 'rendering', progress: 0 });
+    queueMicrotask(() => patch(next.id, { status: 'rendering', progress: 0 }));
 
     let lastShown = 0;
     renderKaraokeVideo(next.karaoke, next.format, {

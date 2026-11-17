@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Karaoke } from '@/lib/types';
+import { cssUrl, pluralRu, safeColor } from '@/lib/format';
 
 const fmt = (n: number) =>
   n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '').replace('.', ',') + ' тыс.' : '' + n;
@@ -58,7 +59,7 @@ function LyricsPreview({ karaoke, active }: { karaoke: Karaoke; active: boolean 
   const visible = lines.slice(Math.max(0, idx - 1), idx + 2);
 
   return (
-    <div className="lp" aria-hidden="true" style={{ '--lpa': karaoke.style?.activeColor || '#ffb547' } as React.CSSProperties}>
+    <div className="lp" aria-hidden="true" style={{ '--lpa': safeColor(karaoke.style?.activeColor, '#ffb547') } as React.CSSProperties}>
       {visible.map((l) => {
         const i = lines.indexOf(l);
         const cls = i === idx ? 'on' : i < idx ? 'pa' : '';
@@ -100,14 +101,14 @@ export default function KaraokeTile({
     return () => io.disconnect();
   }, []);
 
-  const bg = karaoke.style?.backgroundColor || '#1d1b3a';
-  const ac = karaoke.style?.activeColor || '#ffb547';
-  const cover = karaoke.style?.coverImage;
+  const bg = safeColor(karaoke.style?.backgroundColor, '#1d1b3a');
+  const ac = safeColor(karaoke.style?.activeColor, '#ffb547');
+  const coverBg = cssUrl(karaoke.style?.coverImage);
   const playing = hover || inView;
 
   return (
     <Link
-      href={href || `/karaoke/${karaoke.id}`}
+      href={href || `/karaoke/${encodeURIComponent(karaoke.id)}`}
       ref={ref}
       className="cd"
       onMouseEnter={() => setHover(true)}
@@ -117,13 +118,13 @@ export default function KaraokeTile({
     >
       <div className="cwrap">
         <div
-          className={`cv ${cover ? 'img' : ''} ${playing ? 'lpon' : ''}`}
+          className={`cv ${coverBg ? 'img' : ''} ${playing ? 'lpon' : ''}`}
           style={{
-            background: cover ? `url(${cover})` : `linear-gradient(145deg, ${bg}, ${ac})`,
+            background: coverBg ?? `linear-gradient(145deg, ${bg}, ${ac})`,
           }}
         >
-          {!cover && karaoke.title[0]}
-          {!cover && <LyricsPreview karaoke={karaoke} active={playing} />}
+          {!coverBg && karaoke.title[0]}
+          {!coverBg && <LyricsPreview karaoke={karaoke} active={playing} />}
         </div>
         {badge && <span className="ft2">{badge}</span>}
       </div>
@@ -131,7 +132,7 @@ export default function KaraokeTile({
       <small>{karaoke.artist}</small>
       {authorName && <span className="by">от {authorName}</span>}
       {versions && versions > 1 ? (
-        <span className="by">{versions} версий караоке</span>
+        <span className="by">{pluralRu(versions, 'версия', 'версии', 'версий', true)} караоке</span>
       ) : (
         <div className="st">
           <span>

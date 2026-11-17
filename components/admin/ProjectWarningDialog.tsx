@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import ProjectModerationDialog from '@/components/ui/ProjectModerationDialog';
-import { MODERATION_TEXT_LIMIT, sendProjectWarning, subscribeProjectWarningHistory, type ProjectWarning } from '@/lib/project-moderation';
+import { MODERATION_TEXT_LIMIT, sendProjectWarning, subscribeProjectWarningHistory, timestampToDate, type ProjectWarning } from '@/lib/project-moderation';
 import type { Karaoke } from '@/lib/types';
 
 export default function ProjectWarningDialog({ project, moderatorId, onClose, onSent }: {
@@ -59,7 +59,7 @@ export default function ProjectWarningDialog({ project, moderatorId, onClose, on
             <ul className="mt-2 space-y-2">
               {history.map((warning) => (
                 <li key={warning.id} className="text-sm">
-                  <time className="mu">{warning.createdAt.toDate().toLocaleDateString('ru-RU')}</time>
+                  <time className="mu">{timestampToDate(warning.createdAt).toLocaleDateString('ru-RU')}</time>
                   <p className="whitespace-pre-wrap wrap-anywhere">{warning.reason}</p>
                 </li>
               ))}

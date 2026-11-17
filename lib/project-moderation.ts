@@ -25,8 +25,8 @@ export interface ProjectReport {
   type: ReportType;
   details: string;
   status: 'open' | 'reviewed';
-  createdAt: Timestamp;
-  reviewedAt?: Timestamp;
+  createdAt: Timestamp | null;
+  reviewedAt?: Timestamp | null;
   reviewedBy?: string;
 }
 
@@ -36,13 +36,17 @@ export interface ProjectWarning {
   karaokeTitle: string;
   moderatorId: string;
   reason: string;
-  createdAt: Timestamp;
+  createdAt: Timestamp | null;
   read: boolean;
 }
 
 const reports = collection(db, 'projectReports');
 const warnings = (authorId: string) => collection(db, 'users', authorId, 'projectWarnings');
 const projectRef = (id: string) => doc(db, 'karaokes', id);
+
+export function timestampToDate(ts: Timestamp | null | undefined): Date {
+  return ts && typeof ts.toDate === 'function' ? ts.toDate() : new Date();
+}
 
 export function canReportProject(project: Karaoke, reporterId?: string) {
   const visibility = project.visibility ?? 'public';
@@ -95,7 +99,6 @@ export async function sendProjectWarning(karaokeId: string, moderatorId: string,
   if (!message || message.length > MODERATION_TEXT_LIMIT) throw new Error('Проверьте текст предупреждения.');
 
   const target = projectRef(karaokeId);
-  // Keep the ID stable across transaction retries, even if the project changes.
   const warningId = doc(reports).id;
   await runTransaction(db, async (transaction) => {
     const project = (await transaction.get(target)).data() as Karaoke | undefined;
@@ -124,7 +127,7 @@ export function subscribeProjectWarningNotifications(userId: string, onChange: (
         karaokeId: warning.karaokeId,
         text: `Предупреждение по проекту «${warning.karaokeTitle}». ${warning.reason}`,
         read: warning.read,
-        createdAt: warning.createdAt.toDate().toISOString(),
+        createdAt: timestampToDate(warning.createdAt).toISOString(),
       };
     }));
   }, onError);
@@ -140,6 +143,6 @@ export function subscribeProjectWarningHistory(authorId: string, karaokeId: stri
   return onSnapshot(query(warnings(authorId), where('karaokeId', '==', karaokeId)), (snapshot) => {
     onChange(snapshot.docs
       .map((row) => ({ ...row.data(), id: row.id }) as ProjectWarning)
-      .sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis()));
+      .sort((a, b) => timestampToDate(b.createdAt).getTime() - timestampToDate(a.createdAt).getTime()));
   }, onError);
 }

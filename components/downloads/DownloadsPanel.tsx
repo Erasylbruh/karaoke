@@ -7,6 +7,7 @@ import { useDownloads, DownloadJob, projectExists } from '@/context/DownloadsCon
 import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
 import { getDownloadHistory, getKaraokeById } from '@/lib/storage';
+import { safeColor, safeMediaUrl } from '@/lib/format';
 import { DownloadRecord } from '@/lib/types';
 
 /** How many projects the side panel shows; the full list is in Creator Studio. */
@@ -28,12 +29,12 @@ export function formatDate(iso: string) {
 
 /** The project's current cover, or its background colour when it has none. */
 export function DownloadCover({ karaokeId, color }: { karaokeId: string; color?: string }) {
-  const cover = getKaraokeById(karaokeId)?.style?.coverImage;
+  const cover = safeMediaUrl(getKaraokeById(karaokeId)?.style?.coverImage);
   return cover ? (
     // eslint-disable-next-line @next/next/no-img-element
     <img src={cover} alt="" className="dlp-cover" />
   ) : (
-    <span className="dlp-cover" style={{ background: color || '#1d1b3a' }} aria-hidden="true">♪</span>
+    <span className="dlp-cover" style={{ background: safeColor(color, '#1d1b3a') }} aria-hidden="true">♪</span>
   );
 }
 

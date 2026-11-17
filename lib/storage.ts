@@ -17,7 +17,7 @@ import {
   StatType,
   DownloadRecord,
 } from './types';
-import { cols, Col, createOnce } from './store';
+import { cols, Col, createOnce, fetchSingleKaraoke, emitStore } from './store';
 import { uploadPublicFile } from './blob-store';
 
 const LOCAL_KEYS = {
@@ -57,6 +57,8 @@ function localSet<T>(key: string, value: T) {
 }
 
 const K = cols.karaokes as Col<Karaoke>;
+const KS = cols.scopedKaraokes as Col<Karaoke>;
+const KD = cols.directKaraokes as Map<string, Karaoke>;
 const U = cols.users as Col<User>;
 const CM = cols.comments as Col<Comment>;
 const PL = cols.playlists as Col<Playlist>;
@@ -102,9 +104,23 @@ export function visibilityRating(score: number): { value: number; label: string;
 
 // ---------------- KARAOKES ----------------
 
-/** All karaokes of every status. Use getPublicKaraokes() for anything shown to visitors. */
+function mergedKaraokesMap(): Map<string, Karaoke> {
+  const merged = new Map<string, Karaoke>();
+  for (const [id, item] of KD.entries()) merged.set(id, item);
+  for (const [id, item] of K.map.entries()) merged.set(id, item);
+  for (const [id, item] of KS.map.entries()) merged.set(id, item);
+  return merged;
+}
+
+function rawKaraoke(id: string): Karaoke | undefined {
+  return KS.get(id) ?? K.get(id) ?? KD.get(id);
+}
+
+/** All karaokes visible to the current session. Use getPublicKaraokes() for public catalog pages. */
 export function getKaraokes(): Karaoke[] {
-  return K.all().map(normalizeKaraoke).sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+  return [...mergedKaraokesMap().values()]
+    .map(normalizeKaraoke)
+    .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
 }
 
 export function getPublicKaraokes(): Karaoke[] {
@@ -112,8 +128,16 @@ export function getPublicKaraokes(): Karaoke[] {
 }
 
 export function getKaraokeById(id: string): Karaoke | undefined {
-  const k = K.get(id);
+  const k = rawKaraoke(id);
   return k ? normalizeKaraoke(k) : undefined;
+}
+
+/** Fetches a karaoke document directly by ID when it is not yet in the catalog cache (e.g. unlisted link). */
+export async function fetchKaraokeById(id: string): Promise<Karaoke | undefined> {
+  const cached = getKaraokeById(id);
+  if (cached) return cached;
+  const loaded = await fetchSingleKaraoke<Karaoke>(id);
+  return loaded ? normalizeKaraoke(loaded) : undefined;
 }
 
 export function canViewKaraoke(k: Karaoke, viewer: User | null): boolean {
@@ -148,59 +172,97 @@ export function initialRecommendationScore(authorId: string): number {
 }
 
 export function saveKaraoke(karaoke: Karaoke): Karaoke {
-  K.set(karaoke);
+  KS.map.set(karaoke.id, karaoke);
+  if (karaoke.status === 'active' && karaoke.visibility === 'public') {
+    void K.set(karaoke).catch(() => undefined);
+  } else {
+    void KS.set(karaoke).catch(() => undefined);
+  }
   return karaoke;
 }
 
 export function updateKaraoke(id: string, patch: Partial<Karaoke>) {
+  const cur = rawKaraoke(id);
+  if (!cur) return undefined;
+  const next = { ...cur, ...patch } as Karaoke;
+  for (const [k, v] of Object.entries(patch)) if (v === undefined) delete (next as unknown as Record<string, unknown>)[k];
+  if (KS.map.has(id)) KS.map.set(id, next);
+  if (KD.has(id)) KD.set(id, next);
+  if (next.status === 'active' && next.visibility === 'public') {
+    K.map.set(id, next);
+  } else {
+    K.map.delete(id);
+  }
+  // Send the Firestore update once via the primary collection helper.
+  if (!K.map.has(id) && KS.map.has(id)) return KS.patch(id, patch);
+  if (!K.map.has(id)) {
+    // Track transitioned out of public catalog: ensure KS holds cur before patching.
+    KS.map.set(id, cur);
+    return KS.patch(id, patch);
+  }
   return K.patch(id, patch);
 }
 
-export function setKaraokeVisibility(id: string, visibility: Visibility) {
-  return K.patch(id, { visibility });
+function incrementKaraokeField(id: string, field: keyof Karaoke & string, by = 1) {
+  const cur = rawKaraoke(id);
+  if (!cur) return;
+  const updated = { ...cur, [field]: (Number(cur[field]) || 0) + by } as Karaoke;
+  if (KS.map.has(id)) KS.map.set(id, updated);
+  if (KD.has(id)) KD.set(id, updated);
+  if (K.map.has(id)) {
+    K.increment(id, field, by);
+  } else if (KS.map.has(id)) {
+    KS.map.set(id, cur);
+    KS.increment(id, field, by);
+  } else {
+    // Direct unlisted track: update local map and fire atomic increment via K.
+    K.map.set(id, cur);
+    K.increment(id, field, by);
+    K.map.delete(id);
+  }
 }
 
-export const softDeleteKaraoke = (id: string) => K.patch(id, { status: 'deleted' });
-export const blockKaraoke = (id: string) => K.patch(id, { status: 'blocked' });
-export const restoreKaraoke = (id: string) => K.patch(id, { status: 'active' });
+export function setKaraokeVisibility(id: string, visibility: Visibility) {
+  return updateKaraoke(id, { visibility });
+}
+
+export const softDeleteKaraoke = (id: string) => updateKaraoke(id, { status: 'deleted' });
+export const blockKaraoke = (id: string) => updateKaraoke(id, { status: 'blocked' });
+export const restoreKaraoke = (id: string) => updateKaraoke(id, { status: 'active' });
 
 export function deleteKaraoke(id: string): boolean {
+  KS.map.delete(id);
+  KD.delete(id);
   K.remove(id);
+  emitStore();
   return true;
 }
 
 /** True when the cover is stored inside the track document (data URL) instead of as a file. */
 export const hasInlineCover = (k: Karaoke) => !!k.style?.coverImage?.startsWith('data:');
 
-/**
- * Moves an inline cover to Supabase Storage and keeps only its URL on the track, so the catalog
- * no longer downloads every picture with the track list. Throws when the upload is refused.
- */
 export async function moveCoverToStorage(id: string): Promise<boolean> {
-  const k = K.get(id);
+  const k = rawKaraoke(id);
   if (!k || !hasInlineCover(k)) return false;
   const blob = await (await fetch(k.style.coverImage!)).blob();
   const url = await uploadPublicFile(blob, 'covers');
-  const cur = K.get(id);
-  if (cur) K.patch(id, { style: { ...cur.style, coverImage: url } });
+  const cur = rawKaraoke(id);
+  if (cur) updateKaraoke(id, { style: { ...cur.style, coverImage: url } });
   return true;
 }
 
 // ---------------- GENRES ----------------
 
-/** Genres a project can have; used until an admin saves a list of their own (config/genres). */
 export const DEFAULT_GENRES = [
   'поп', 'рок', 'инди', 'альтернатива', 'хип-хоп', 'рэп', 'р&б', 'соул', 'фанк', 'джаз', 'блюз',
   'электроника', 'электропоп', 'синти-поп', 'хаус', 'техно', 'лоу-фай', 'метал', 'панк', 'фолк',
   'народная', 'кантри', 'регги', 'латино', 'к-поп', 'джей-поп', 'аниме', 'саундтрек', 'мюзикл',
   'классика', 'акустика', 'эстрада', 'шансон', 'диско', 'детская',
 ];
-/** A project keeps at most this many genres. */
 export const MAX_GENRES = 6;
 
 const CFG = cols.config as Col<{ id: string; list?: string[] }>;
 
-/** Lowercase, no "#", spaces become dashes: genres are also URL parts (/tag/...). */
 export const normalizeGenre = (g: string) =>
   g.trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-').slice(0, 30);
 
@@ -209,17 +271,15 @@ export function getGenres(): string[] {
   return list?.length ? list : DEFAULT_GENRES;
 }
 
-/** Admin: replaces the genre list (normalized, without duplicates). */
 export function saveGenres(list: string[]) {
   const clean = [...new Set(list.map(normalizeGenre).filter(Boolean))];
-  CFG.set({ id: 'genres', list: clean });
+  void CFG.set({ id: 'genres', list: clean }).catch(() => undefined);
   return clean;
 }
 
-/** How many active projects use each genre (for the admin list). */
 export function genreUsage(): Map<string, number> {
   const m = new Map<string, number>();
-  K.all()
+  getKaraokes()
     .filter((k) => k.status === 'active')
     .forEach((k) => k.tags.forEach((t) => m.set(t, (m.get(t) || 0) + 1)));
   return m;
@@ -234,7 +294,7 @@ export function notify(
   extra: { actorId?: string; actorName?: string; karaokeId?: string; karaokeTitle?: string; commentId?: string } = {}
 ) {
   if (!userId || (extra.actorId && extra.actorId === userId)) return;
-  NT.set({ id: 'nt-' + uid(), userId, type, text, createdAt: new Date().toISOString(), read: false, ...extra });
+  void NT.set({ id: 'nt-' + uid(), userId, type, text, createdAt: new Date().toISOString(), read: false, ...extra }).catch(() => undefined);
 }
 
 export function getNotifications(userId: string): AppNotification[] {
@@ -249,13 +309,12 @@ export function markNotificationsRead(userId: string) {
     .forEach((n) => NT.patch(n.id, { read: true }));
 }
 
-/** Name of whoever did the action; guests are "Гость". */
 function actorName(actorId: string) {
   return getUserById(actorId)?.name ?? 'Гость';
 }
 
 function notifyAuthor(karaokeId: string, actorId: string, type: NotificationType, verb: string) {
-  const k = K.get(karaokeId);
+  const k = rawKaraoke(karaokeId);
   if (!k) return;
   const name = actorName(actorId);
   notify(k.authorId, type, `${name} ${verb} «${k.title}»`, {
@@ -268,13 +327,11 @@ function notifyAuthor(karaokeId: string, actorId: string, type: NotificationType
 
 // ---------------- DAILY STATS (charts) ----------------
 
-/** +1 on the author's chart for today. Atomic: the actor usually can't see the author's stats. */
 export function bumpStat(authorId: string, type: StatType, by = 1) {
   const day = today();
   ST.upsertIncrement(`${authorId}_${type}_${day}`, { authorId, type, day, count: 0 }, 'count', by);
 }
 
-/** Counts per day for the last `days` days, oldest first. */
 export function getDailyStats(authorId: string, type: StatType, days = 30): { day: string; count: number }[] {
   const out: { day: string; count: number }[] = [];
   for (let i = days - 1; i >= 0; i--) {
@@ -284,22 +341,17 @@ export function getDailyStats(authorId: string, type: StatType, days = 30): { da
   return out;
 }
 
-/** Share of the track that must actually be heard (seeking forward does not count) for a listen. */
 export const LISTEN_SHARE = 0.45;
 
-/**
- * One real listen: bumps the track's play counter (`viewsCount`, the ▶ number) and the author's chart.
- * Opening the page alone never counts, and the author's own listens don't either.
- */
 export function registerListen(karaokeId: string, actorId: string) {
-  const k = K.get(karaokeId);
+  const k = rawKaraoke(karaokeId);
   if (!k || k.authorId === actorId) return;
-  K.increment(karaokeId, 'viewsCount');
+  incrementKaraokeField(karaokeId, 'viewsCount');
   bumpStat(k.authorId, 'listen');
 }
 
 export function registerDownload(karaokeId: string, actorId: string) {
-  const k = K.get(karaokeId);
+  const k = rawKaraoke(karaokeId);
   if (!k || k.authorId === actorId) return;
   bumpStat(k.authorId, 'download');
   notifyAuthor(karaokeId, actorId, 'download', 'скачал(а) видео');
@@ -307,10 +359,6 @@ export function registerDownload(karaokeId: string, actorId: string) {
 
 // ---------------- RECOMMENDATION SCORE ----------------
 
-/**
- * Each (actor, karaoke, type) counts once, and the author's own actions never count,
- * so the score can't be pumped by repeating the same action.
- */
 const countedInteractions = new Set<string>();
 
 export function registerInteraction(karaokeId: string, actorId: string, type: InteractionType): void {
@@ -319,13 +367,13 @@ export function registerInteraction(karaokeId: string, actorId: string, type: In
   const key = `${karaokeId}|${actorId}|${type}`;
   if (countedInteractions.has(key)) return;
   countedInteractions.add(key);
-  // The flag document is created once per (track, actor, type); only the call that created it scores.
   void createOnce('interactions', key, { at: new Date().toISOString() }).then((created) => {
-    const cur = K.get(karaokeId);
+    const cur = rawKaraoke(karaokeId);
     if (!created || !cur) return;
-    const add = Math.min(100, cur.recommendationScore + INTERACTION_WEIGHT[type]) - cur.recommendationScore;
-    if (add > 0) K.increment(karaokeId, 'recommendationScore', add);
-    if (!cur.isFeatured && cur.recommendationScore + add >= RECOMMEND_THRESHOLD) K.patch(karaokeId, { isFeatured: true });
+    const score = typeof cur.recommendationScore === 'number' ? cur.recommendationScore : 10;
+    const add = Math.min(100, score + INTERACTION_WEIGHT[type]) - score;
+    if (add > 0) incrementKaraokeField(karaokeId, 'recommendationScore', add);
+    if (!cur.isFeatured && score + add >= RECOMMEND_THRESHOLD) updateKaraoke(karaokeId, { isFeatured: true });
   });
 }
 
@@ -334,12 +382,12 @@ export function registerInteraction(karaokeId: string, actorId: string, type: In
 export function toggleKaraokeLike(karaokeId: string, userId: string): { isLiked: boolean; count: number } {
   const userLikes = cols.likes.get(userId)?.ids || [];
   const isLiked = userLikes.includes(karaokeId);
-  cols.likes.set({ id: userId, ids: isLiked ? userLikes.filter((id) => id !== karaokeId) : [...userLikes, karaokeId] });
+  void cols.likes.set({ id: userId, ids: isLiked ? userLikes.filter((id) => id !== karaokeId) : [...userLikes, karaokeId] }).catch(() => undefined);
 
-  const k = K.get(karaokeId);
+  const k = rawKaraoke(karaokeId);
   let count = k?.likesCount || 0;
   if (k) {
-    if (!(isLiked && count <= 0)) K.increment(karaokeId, 'likesCount', isLiked ? -1 : 1);
+    if (!(isLiked && count <= 0)) incrementKaraokeField(karaokeId, 'likesCount', isLiked ? -1 : 1);
     count = Math.max(0, count + (isLiked ? -1 : 1));
     if (!isLiked) {
       registerInteraction(karaokeId, userId, 'like');
@@ -363,12 +411,11 @@ export function getComments(karaokeId: string): Comment[] {
 }
 
 export function addComment(comment: Comment): Comment {
-  CM.set(comment);
+  void CM.set(comment).catch(() => undefined);
   registerInteraction(comment.karaokeId, comment.userId, 'comment');
-  const k = K.get(comment.karaokeId);
+  const k = rawKaraoke(comment.karaokeId);
   const parent = comment.parentId ? CM.get(comment.parentId) : undefined;
   if (parent) {
-    // Reply: tell the person who was answered, quoting the reply and linking to it.
     const quote = comment.content.length > 80 ? comment.content.slice(0, 80) + '…' : comment.content;
     notify(parent.userId, 'reply', `${comment.userName} ответил(а) на ваш отзыв: «${quote}»`, {
       actorId: comment.userId,
@@ -390,7 +437,6 @@ export function addComment(comment: Comment): Comment {
   return comment;
 }
 
-/** Track author or admin pins a top-level review; only one stays pinned per track. */
 export function togglePinComment(id: string) {
   const c = CM.get(id);
   if (!c) return;
@@ -413,24 +459,24 @@ export function normalizeUsername(input: string): string {
   return input.trim().replace(/^@/, '').toLowerCase();
 }
 
-/**
- * Email and moderation details live in `userPrivate/{id}`, readable only by the owner and admins;
- * `users/{id}` is the public profile. Reads merge the two when the private part is available.
- */
-const PRIVATE_KEYS = ['email', 'warnings', 'banReason'] as const;
+const PRIVATE_KEYS = ['email', 'contactEmail', 'warnings', 'banReason'] as const;
 type PrivateUser = Pick<User, 'id' | (typeof PRIVATE_KEYS)[number]>;
 const UP = cols.userPrivate as Col<PrivateUser>;
 
-/** True once the signed-in person's private profile has been read (even if it doesn't exist). */
 export const privateProfileLoaded = () => UP.loaded;
 
 function withPrivate(u: User | undefined): User | undefined {
   if (!u) return u;
   const p = UP.get(u.id);
-  return p ? { ...u, ...p, id: u.id } : u;
+  if (!p) return u;
+  const merged: User = { ...u, ...p, id: u.id };
+  // Restore hidden contact email draft for the owner/admin when showEmail is off.
+  if (p.contactEmail && !merged.contacts?.email) {
+    merged.contacts = { ...(merged.contacts ?? {}), email: p.contactEmail };
+  }
+  return merged;
 }
 
-/** Fields of `next` that differ from `cur` (removed ones as undefined). */
 function changed<T extends object>(cur: T, next: T): Partial<T> {
   const out: Record<string, unknown> = {};
   const a = cur as Record<string, unknown>;
@@ -465,7 +511,6 @@ export function isUsernameTaken(tag: string, exceptUserId?: string): boolean {
   return U.all().some((u) => u.username.toLowerCase() === t && u.id !== exceptUserId);
 }
 
-/** Returns an error message or null when the tag is valid and free. */
 export function validateUsername(tag: string, exceptUserId?: string): string | null {
   const t = normalizeUsername(tag);
   if (!USERNAME_RE.test(t)) return 'Тег: 3–20 символов, латиница, цифры и «_»';
@@ -473,40 +518,70 @@ export function validateUsername(tag: string, exceptUserId?: string): string | n
   return null;
 }
 
-/** Saves a profile: public fields to `users`, email and moderation details to `userPrivate`. */
-export function saveUser(user: User): User {
+/** Splits public vs private user fields, ensuring hidden contact emails never enter public `users`. */
+function splitUserFields(user: User): { pub: Record<string, unknown>; priv: Record<string, unknown> } {
   const pub = { ...user } as Record<string, unknown>;
   const priv: Record<string, unknown> = { id: user.id };
+
+  // Never keep `contacts.email` in the public document when `showEmail` is false.
+  if (user.contacts) {
+    const cleanContacts = { ...user.contacts };
+    if (!cleanContacts.showEmail) {
+      if (cleanContacts.email) priv.contactEmail = cleanContacts.email;
+      delete cleanContacts.email;
+    } else {
+      priv.contactEmail = cleanContacts.email || undefined;
+    }
+    pub.contacts = cleanContacts;
+  }
+
   for (const k of PRIVATE_KEYS) {
-    if (pub[k] !== undefined) priv[k] = pub[k];
+    if (pub[k] !== undefined && priv[k] === undefined) priv[k] = pub[k];
     delete pub[k];
   }
+  return { pub, priv };
+}
+
+/** Saves a profile: public fields to `users`, email and moderation details to `userPrivate`. */
+export function saveUser(user: User): User {
+  void saveUserAsync(user).catch(() => undefined);
+  return user;
+}
+
+/** Async variant used during registration so we know the profile document is persisted. */
+export async function saveUserAsync(user: User): Promise<User> {
+  const { pub, priv } = splitUserFields(user);
+  const writes: Promise<unknown>[] = [];
+
   const cur = U.get(user.id) as Record<string, unknown> | undefined;
-  if (!cur) U.set(pub as unknown as User);
-  else {
-    // A public profile that still carries old private fields loses them on the next save.
+  if (!cur) {
+    writes.push(U.set(pub as unknown as User));
+  } else {
     const diff = changed(cur, pub);
     for (const k of PRIVATE_KEYS) if (k in cur) diff[k] = undefined;
     if (Object.keys(diff).length) U.patch(user.id, diff as Partial<User>);
   }
+
   const curP = UP.get(user.id) as Record<string, unknown> | undefined;
   if (!curP) {
-    if (Object.keys(priv).length > 1) UP.set(priv as unknown as PrivateUser);
+    const cleanPriv = Object.fromEntries(Object.entries(priv).filter(([, v]) => v !== undefined));
+    if (Object.keys(cleanPriv).length > 1) writes.push(UP.set(cleanPriv as unknown as PrivateUser));
   } else {
     const diff = changed(curP, priv);
     if (Object.keys(diff).length) UP.patch(user.id, diff as Partial<PrivateUser>);
   }
+
+  await Promise.all(writes);
   return user;
 }
 
-/** Profiles whose public document still holds an email or moderation details. */
 export const usersWithPublicPrivateData = () =>
-  U.all().filter((u) => PRIVATE_KEYS.some((k) => (u as unknown as Record<string, unknown>)[k] !== undefined));
+  U.all().filter(
+    (u) =>
+      PRIVATE_KEYS.some((k) => (u as unknown as Record<string, unknown>)[k] !== undefined) ||
+      (!!u.contacts?.email && !u.contacts?.showEmail)
+  );
 
-/**
- * One-off move (admin): copies email and moderation details of every profile into `userPrivate`
- * and removes them from the public `users` documents. Returns how many profiles were cleaned.
- */
 export function movePrivateUserData(): number {
   const list = usersWithPublicPrivateData();
   for (const u of list) saveUser({ ...u, ...(UP.get(u.id) ?? {}), ...pickPrivate(u) });
@@ -515,11 +590,13 @@ export function movePrivateUserData(): number {
 
 function pickPrivate(u: User): Partial<User> {
   const out: Record<string, unknown> = {};
-  for (const k of PRIVATE_KEYS) if ((u as unknown as Record<string, unknown>)[k] !== undefined) out[k] = (u as unknown as Record<string, unknown>)[k];
+  for (const k of PRIVATE_KEYS) {
+    const v = (u as unknown as Record<string, unknown>)[k];
+    if (v !== undefined) out[k] = v;
+  }
   return out as Partial<User>;
 }
 
-/** A temporary ban that has run out counts as active again. */
 export function effectiveStatus(u: User): UserStatus {
   const s = u.status ?? 'active';
   if (s === 'banned_temp' && u.banUntil && new Date(u.banUntil).getTime() <= Date.now()) return 'active';
@@ -555,21 +632,26 @@ export function moderateUser(
       next.banReason = opts.reason;
       notify(id, 'warning', `Вы получили предупреждение${why}`, { actorId: opts.moderatorId });
       break;
-    case 'ban_temp':
+    case 'ban_temp': {
+      const untilMs = Date.now() + (opts.days ?? 7) * 86400000;
       next.status = 'banned_temp';
-      next.banUntil = new Date(Date.now() + (opts.days ?? 7) * 86400000).toISOString();
+      next.banUntil = new Date(untilMs).toISOString();
+      next.banUntilMs = untilMs;
       next.banReason = opts.reason;
       notify(id, 'ban', `Аккаунт заблокирован на ${opts.days ?? 7} дн.${why}`, { actorId: opts.moderatorId });
       break;
+    }
     case 'ban_perm':
       next.status = 'banned_perm';
       next.banUntil = undefined;
+      next.banUntilMs = undefined;
       next.banReason = opts.reason;
       notify(id, 'ban', `Аккаунт заблокирован навсегда${why}`, { actorId: opts.moderatorId });
       break;
     case 'clear':
       next.status = 'active';
       next.banUntil = undefined;
+      next.banUntilMs = undefined;
       next.banReason = undefined;
       break;
   }
@@ -591,7 +673,7 @@ export function toggleFollow(followerId: string, targetId: string): { following:
   const list = cols.follows.get(targetId)?.followers || [];
   const following = list.includes(followerId);
   const next = following ? list.filter((id) => id !== followerId) : [...list, followerId];
-  cols.follows.set({ id: targetId, followers: next });
+  void cols.follows.set({ id: targetId, followers: next }).catch(() => undefined);
   if (!following) {
     bumpStat(targetId, 'follow');
     const name = actorName(followerId);
@@ -616,11 +698,11 @@ export function createPlaylist(ownerId: string, name: string, karaokeId?: string
   const p: Playlist = {
     id: 'pl-' + uid(),
     ownerId,
-    name: name.trim() || 'Новый плейлист',
+    name: (name.trim() || 'Новый плейлист').slice(0, 100),
     karaokeIds: karaokeId ? [karaokeId] : [],
     createdAt: new Date().toISOString(),
   };
-  PL.set(p);
+  void PL.set(p).catch(() => undefined);
   if (karaokeId) onAddedToPlaylist(karaokeId, ownerId);
   return p;
 }
@@ -636,7 +718,7 @@ export function togglePlaylistItem(playlistId: string, karaokeId: string): boole
 
 export function renamePlaylist(playlistId: string, name: string) {
   const p = PL.get(playlistId);
-  if (p) PL.patch(playlistId, { name: name.trim() || p.name });
+  if (p) PL.patch(playlistId, { name: (name.trim() || p.name).slice(0, 100) });
 }
 
 export function deletePlaylist(playlistId: string) {
@@ -666,7 +748,6 @@ export function guestPlaysLeft(karaokeId?: string): number {
   return Math.max(0, GUEST_PLAY_LIMIT - g.played.length);
 }
 
-/** Records the start of playback. Returns false if the guest has used all free plays. */
 export function registerGuestPlay(karaokeId: string): boolean {
   const g = readGuest();
   if (g.played.includes(karaokeId)) return true;
@@ -690,8 +771,6 @@ export function getAuthorStats(authorId: string) {
 }
 
 // ---------------- TUTORIAL ----------------
-// Signed-in people keep the list in their profile, so a walkthrough seen on one device stays
-// seen on every other. Guests only have this browser (localStorage, keys `guest:{page}`).
 
 const localTutorials = () => localGet<Record<string, boolean>>(LOCAL_KEYS.TUTORIAL, {});
 
@@ -700,7 +779,6 @@ export function isTutorialSeen(userKey: string, page: string): boolean {
   const user = userKey === 'guest' ? undefined : U.get(userKey);
   if (!user) return !!local[`${userKey}:${page}`];
   if (user.seenTutorials?.includes(page)) return true;
-  // Seen in this browser before signing in, or before the list moved to the profile: carry it over.
   if (local[`${userKey}:${page}`] || local[`guest:${page}`]) {
     markTutorialSeen(userKey, page);
     return true;
@@ -720,7 +798,6 @@ export function markTutorialSeen(userKey: string, page: string) {
 }
 
 export function resetTutorials(userKey: string) {
-  // Local marks would be carried back into the profile, so they go too.
   const m = localTutorials();
   Object.keys(m).forEach((k) => (k.startsWith(userKey + ':') || k.startsWith('guest:')) && delete m[k]);
   localSet(LOCAL_KEYS.TUTORIAL, m);
@@ -730,10 +807,9 @@ export function resetTutorials(userKey: string) {
 // ---------------- DOWNLOAD HISTORY ----------------
 
 export function addDownloadRecord(record: DownloadRecord) {
-  DL.set(record);
+  void DL.set(record).catch(() => undefined);
 }
 
-/** The user's finished downloads, newest first. */
 export function getDownloadHistory(userId: string | undefined): DownloadRecord[] {
   if (!userId) return [];
   return DL.all()

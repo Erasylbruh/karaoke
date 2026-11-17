@@ -15,8 +15,8 @@ export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  // Live check, so the tag is verified before the form is even submitted.
   const tagError = useMemo(() => (username ? validateUsername(username) : null), [username]);
   const tagOk = !!username && !tagError;
 
@@ -31,7 +31,9 @@ export default function RegisterPage() {
       setError('Пароль должен быть не короче 6 символов');
       return;
     }
+    setBusy(true);
     const res = await register({ username, name, email, password });
+    setBusy(false);
     if (res.ok) router.push('/');
     else setError(res.error);
   };
@@ -44,13 +46,14 @@ export default function RegisterPage() {
       <form className="stack card" onSubmit={handleSubmit}>
         <label className="fld">
           Имя
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Лиза Ветер" />
+          <input type="text" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} placeholder="Лиза Ветер" />
         </label>
 
         <label className="fld">
           Тег
           <input
             type="text"
+            maxLength={21}
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="@liza_veter"
@@ -63,19 +66,31 @@ export default function RegisterPage() {
 
         <label className="fld">
           Email
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" autoComplete="email" />
         </label>
 
         <label className="fld">
           Пароль
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Не короче 6 символов" />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Не короче 6 символов"
+            autoComplete="new-password"
+          />
         </label>
 
         {error && <div className="fld"><span className="err">{error}</span></div>}
 
-        <button type="submit" className="bt pr" disabled={!!tagError}>
-          Зарегистрироваться
+        <button type="submit" className="bt pr" disabled={busy || !!tagError}>
+          {busy ? 'Создаём аккаунт…' : 'Зарегистрироваться'}
         </button>
+
+        <p className="mu sm" style={{ margin: 0, fontSize: 12, lineHeight: 1.45 }}>
+          Регистрируясь, вы принимаете{' '}
+          <Link href="/terms" style={{ color: 'var(--ac)' }}>Пользовательское соглашение</Link> и{' '}
+          <Link href="/privacy" style={{ color: 'var(--ac)' }}>Политику конфиденциальности</Link>.
+        </p>
       </form>
 
       <p className="mu sm" style={{ textAlign: 'center', marginTop: 18 }}>

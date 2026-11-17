@@ -1,5 +1,6 @@
 import { KaraokeStyle } from './types';
 import { resolveBlobUrl } from './blob-store';
+import { cssUrl } from './format';
 
 export const DEFAULT_FONTS = [
   'Onest',
@@ -32,10 +33,17 @@ const GENERIC: Record<string, string> = {
 };
 
 export const GOOGLE_FONT_NAME = /^[A-Za-z][A-Za-z0-9 ]{1,39}$/;
+const SAFE_FAMILY_NAME = /^[A-Za-z0-9 _-]{1,48}$/;
+
+export function sanitizeFontName(font: string | undefined): string {
+  const trimmed = font?.trim() || 'Onest';
+  return SAFE_FAMILY_NAME.test(trimmed) ? trimmed : 'Onest';
+}
 
 export function fontCss(font: string): string {
-  if (GENERIC[font]) return GENERIC[font];
-  return `"${font}", "Onest", system-ui, sans-serif`;
+  const clean = sanitizeFontName(font);
+  if (GENERIC[clean]) return GENERIC[clean];
+  return `"${clean}", "Onest", system-ui, sans-serif`;
 }
 
 export function isFontFile(file: File): boolean {
@@ -69,13 +77,15 @@ export function loadGoogleFont(name: string) {
 }
 
 export async function loadCustomFont(family: string, ref: string) {
-  if (typeof document === 'undefined' || loaded.has(family)) return;
+  const cleanFamily = sanitizeFontName(family);
+  if (typeof document === 'undefined' || loaded.has(cleanFamily)) return;
   const url = await resolveBlobUrl(ref);
-  if (!url) return;
-  const face = new FontFace(family, `url(${url})`);
+  const srcCss = cssUrl(url);
+  if (!srcCss) return;
+  const face = new FontFace(cleanFamily, srcCss);
   await face.load();
   document.fonts.add(face);
-  loaded.add(family);
+  loaded.add(cleanFamily);
 }
 
 /** Makes sure the font of a style is available in the page. */

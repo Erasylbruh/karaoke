@@ -30,12 +30,11 @@ function LegacyAdminAccess({ uid, profileId, children }: { uid: string; profileI
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { user, isAdmin, isLoading } = useAuth();
 
-  // Keep the page in the tree while auth loads (hidden), so the route still renders a static shell.
   if (isLoading) {
     return (
       <div className="shell" aria-busy="true">
         <div />
-        <div className="main" style={{ visibility: 'hidden' }}>{children}</div>
+        <div className="main" />
       </div>
     );
   }

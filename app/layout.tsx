@@ -11,10 +11,20 @@ import DataProvider from '@/components/DataProvider';
 import { DownloadsProvider } from '@/context/DownloadsContext';
 import DownloadsPanel from '@/components/downloads/DownloadsPanel';
 import VerifyEmailBanner from '@/components/layout/VerifyEmailBanner';
+import { SITE_URL } from '@/lib/server-meta';
 
 export const metadata: Metadata = {
-  title: 'KaraokeCraft — караоке-анимации',
-  description: 'Покажите песню так, как вы её слышите. Создавайте караоке-анимации в стиле Spotify Lyrics с динамической синхронизацией строк и экспортом видео с водяным знаком.',
+  metadataBase: new URL(SITE_URL),
+  title: 'KaraokeCraft — студия и каталог караоке-анимаций',
+  description:
+    'Покажите песню так, как вы её слышите. Создавайте караоке-анимации с синхронной подсветкой строк, гибкой настройкой визуального стиля и экспортом видео 9:16 и 16:9.',
+  openGraph: {
+    title: 'KaraokeCraft — студия и каталог караоке-анимаций',
+    description: 'Синхронизация текста с музыкой, живой плеер и быстрый экспорт караоке-видео.',
+    siteName: 'KaraokeCraft',
+    locale: 'ru_RU',
+    type: 'website',
+  },
 };
 
 // Defaults plus the popular fonts offered in the editor. Other fonts are loaded on demand (lib/fonts.ts).
@@ -38,24 +48,24 @@ export default function RootLayout({
       </head>
       <body>
         <DataProvider>
-        <AuthProvider>
-        <DownloadsProvider>
-          <Suspense fallback={null}>
-            <SiteChrome><Navbar /></SiteChrome>
-          </Suspense>
-          <main>
-            <VerifyEmailBanner />
-            <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
-              {children}
-            </Suspense>
-          </main>
-          <Suspense fallback={null}>
-            <SiteChrome><Footer /></SiteChrome>
-          </Suspense>
-          <AuthPrompt />
-          <DownloadsPanel />
-        </DownloadsProvider>
-        </AuthProvider>
+          <AuthProvider>
+            <DownloadsProvider>
+              <Suspense fallback={null}>
+                <SiteChrome><Navbar /></SiteChrome>
+              </Suspense>
+              <main>
+                <VerifyEmailBanner />
+                <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
+                  {children}
+                </Suspense>
+              </main>
+              <Suspense fallback={null}>
+                <SiteChrome><Footer /></SiteChrome>
+              </Suspense>
+              <AuthPrompt />
+              <DownloadsPanel />
+            </DownloadsProvider>
+          </AuthProvider>
         </DataProvider>
       </body>
     </html>

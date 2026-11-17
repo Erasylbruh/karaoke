@@ -17,10 +17,11 @@ mod tunnel;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use axum::extract::{DefaultBodyLimit, Multipart, State};
-use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -33,14 +34,26 @@ use whisper_rs::{DtwMode, DtwModelPreset, DtwParameters, WhisperContext, Whisper
 const MAX_UPLOAD: usize = 60 * 1024 * 1024;
 const MAX_SECONDS: f32 = 15.0 * 60.0;
 const MAX_LINES: usize = 1000;
+const MAX_LYRICS_CHARS: usize = 24_000;
+const MAX_WAITING_JOBS: usize = 2;
 /// Site addresses allowed to call the service (plus any localhost port, see `origin_allowed`).
-const DEFAULT_ORIGINS: &str = "https://karaokecraft.vercel.app,https://karaoke-six-dusky.vercel.app";
+const DEFAULT_ORIGINS: &str = "https://karaokecraft.vercel.app";
 
 struct AppState {
     ctx: WhisperContext,
     model: String,
     /// Whisper uses all CPU cores, so jobs run one at a time.
     busy: Semaphore,
+    /// Bounds queued requests before reading large multipart uploads into memory.
+    waiting: AtomicUsize,
+    http: reqwest::Client,
+}
+
+struct QueueGuard<'a>(&'a AtomicUsize);
+impl Drop for QueueGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 #[derive(Serialize)]
@@ -75,8 +88,6 @@ async fn main() -> anyhow::Result<()> {
     }
     tracing::info!("loading model {model}");
     let mut cparams = WhisperContextParameters::default();
-    // DTW over the model's alignment heads gives each token a real onset time; without it a word
-    // "starts" where the previous one ended, so lines after a pause begin too early.
     if let Some(preset) = dtw_preset(&model) {
         cparams.dtw_parameters(DtwParameters { mode: DtwMode::ModelPreset { model_preset: preset }, ..Default::default() });
     } else {
@@ -84,9 +95,15 @@ async fn main() -> anyhow::Result<()> {
     }
     let ctx = WhisperContext::new_with_params(&model, cparams)
         .map_err(|e| anyhow::anyhow!("cannot load model: {e:?}"))?;
-    let state = Arc::new(AppState { ctx, model, busy: Semaphore::new(1) });
+    let http = reqwest::Client::new();
+    let state = Arc::new(AppState {
+        ctx,
+        model,
+        busy: Semaphore::new(1),
+        waiting: AtomicUsize::new(0),
+        http: http.clone(),
+    });
 
-    // ALIGNER_ORIGINS adds to the defaults, so a new domain doesn't silently drop the old ones.
     let mut origins: Vec<String> = DEFAULT_ORIGINS.split(',').map(String::from).collect();
     if let Ok(extra) = std::env::var("ALIGNER_ORIGINS") {
         origins.extend(extra.split(',').map(|o| o.trim().trim_end_matches('/').to_string()).filter(|o| !o.is_empty()));
@@ -97,8 +114,7 @@ async fn main() -> anyhow::Result<()> {
             origin.to_str().map(|o| origin_allowed(o, &origins)).unwrap_or(false)
         }))
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers([header::CONTENT_TYPE])
-        // Lets an https site call this service on localhost (Chrome "private network access").
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .allow_private_network(true);
 
     let app = Router::new()
@@ -113,17 +129,27 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("aligner ready on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Public access through a tunnel, so the phone or another computer can use this PC.
-    let http = reqwest::Client::new();
     let mut tunnel_child = None;
+    let mut publisher = None;
     if std::env::var("ALIGNER_PUBLIC").map(|v| v != "0").unwrap_or(true) {
-        match tunnel::start(port).await {
-            Ok((child, url)) => {
-                tracing::info!("public address: {url} (other devices find it automatically)");
-                tunnel_child = Some(child);
-                tokio::spawn(tunnel::heartbeat(http.clone(), url));
-            }
-            Err(e) => tracing::warn!("no public access, this computer only: {e:#}"),
+        match tunnel::Publisher::from_env(http) {
+            None => tracing::warn!(
+                "ALIGNER_EMAIL / ALIGNER_PASSWORD are not set: no public access, this computer only \
+                 (see aligner/README.md, section on phones and other computers)"
+            ),
+            Some(p) => match p.sign_in().await {
+                Err(e) => tracing::warn!("no public access, this computer only: {e:#}"),
+                Ok(()) => match tunnel::start(port).await {
+                    Ok((child, url)) => {
+                        tracing::info!("public address: {url} (other devices find it automatically)");
+                        tunnel_child = Some(child);
+                        let p = std::sync::Arc::new(p);
+                        tokio::spawn(tunnel::heartbeat(p.clone(), url));
+                        publisher = Some(p);
+                    }
+                    Err(e) => tracing::warn!("no public access, this computer only: {e:#}"),
+                },
+            },
         }
     }
 
@@ -133,9 +159,8 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?;
 
-    // Tell the site the server is gone, so other devices stop waiting for it.
-    if tunnel_child.is_some() {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), tunnel::publish(&http, "")).await;
+    if let Some(p) = &publisher {
+        let _ = tokio::time::timeout(Duration::from_secs(3), p.publish("")).await;
     }
     drop(tunnel_child);
     Ok(())
@@ -151,7 +176,6 @@ fn origin_allowed(origin: &str, allowed: &[String]) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
-/// DTW alignment heads must match the model, so pick the preset from the file name.
 fn dtw_preset(model_path: &str) -> Option<DtwModelPreset> {
     let name = std::path::Path::new(model_path).file_stem()?.to_str()?.to_lowercase();
     let name = name.trim_start_matches("ggml-");
@@ -178,7 +202,45 @@ async fn health(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
     }))
 }
 
-async fn align_handler(State(st): State<Arc<AppState>>, mut form: Multipart) -> Result<Json<AlignResponse>, ApiError> {
+fn is_tunneled_request(headers: &HeaderMap) -> bool {
+    headers.contains_key("cf-connecting-ip") || headers.contains_key("cf-ray") || headers.contains_key("x-forwarded-for")
+}
+
+async fn align_handler(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mut form: Multipart,
+) -> Result<Json<AlignResponse>, ApiError> {
+    // Requests arriving over the public Cloudflare tunnel must carry a valid Firebase ID token.
+    if is_tunneled_request(&headers) {
+        let bearer = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("");
+        if !tunnel::verify_user_token(&st.http, bearer).await {
+            return Err(ApiError(
+                StatusCode::UNAUTHORIZED,
+                "Требуется вход в аккаунт для авто-тайминга".into(),
+            ));
+        }
+    }
+
+    // Cap concurrent waiters and acquire the worker slot BEFORE buffering up to 60 MB into RAM.
+    if st.waiting.fetch_add(1, Ordering::SeqCst) > MAX_WAITING_JOBS {
+        st.waiting.fetch_sub(1, Ordering::SeqCst);
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Сервис занят другой песней, попробуйте через минуту".into(),
+        ));
+    }
+    let _queue_guard = QueueGuard(&st.waiting);
+
+    let _permit = tokio::time::timeout(Duration::from_secs(90), st.busy.acquire())
+        .await
+        .map_err(|_| ApiError(StatusCode::TOO_MANY_REQUESTS, "Сервис занят, попробуйте позже".into()))?
+        .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "shutting down".into()))?;
+
     let mut audio: Option<(Vec<u8>, Option<String>)> = None;
     let mut lines: Option<Vec<String>> = None;
     let mut language = "auto".to_string();
@@ -194,6 +256,9 @@ async fn align_handler(State(st): State<Arc<AppState>>, mut form: Multipart) -> 
             }
             "lyrics" => {
                 let text = field.text().await.map_err(|e| bad(e.to_string()))?;
+                if text.len() > MAX_LYRICS_CHARS {
+                    return Err(bad("текст песни слишком длинный"));
+                }
                 let parsed: Vec<String> =
                     serde_json::from_str(&text).map_err(|_| bad("lyrics must be a JSON array of strings"))?;
                 lines = Some(parsed);
@@ -213,20 +278,14 @@ async fn align_handler(State(st): State<Arc<AppState>>, mut form: Multipart) -> 
         return Err(bad(format!("lyrics must have 1..{MAX_LINES} lines")));
     }
 
-    let _permit = st
-        .busy
-        .acquire()
-        .await
-        .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "shutting down".into()))?;
     let started = Instant::now();
     let st2 = st.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<AlignResponse> {
-        let samples = audio::decode_to_16k_mono(bytes, ext.as_deref())?;
+        let samples = audio::decode_to_16k_mono(bytes, ext.as_deref(), MAX_SECONDS)?;
         let duration = samples.len() as f32 / audio::TARGET_RATE as f32;
         if duration > MAX_SECONDS {
             anyhow::bail!("audio is longer than {} minutes", MAX_SECONDS / 60.0);
         }
-        // The start of the lyrics as a hint; Whisper only uses ~200 tokens of it anyway.
         let prompt: String = lines.join(" ").chars().take(300).collect();
         let t = transcribe::transcribe(&st2.ctx, &samples, &language, &prompt)?;
         let timed = align::align(&lines, &t.words, duration);

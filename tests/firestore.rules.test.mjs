@@ -30,10 +30,14 @@ beforeEach(async () => {
     await user('alice', 'user', { email: 'alice@x.com' });
     await user('bob');
     await user('carol');
+    await user('banned', 'user', { status: 'banned_perm' });
     await user('admin', 'admin');
     await db.doc('userPrivate/alice').set({ id: 'alice', email: 'alice@x.com', warnings: 1 });
     await db.doc('userPrivate/bob').set({ id: 'bob', email: 'bob@x.com' });
-    await db.doc('karaokes/k1').set({ id: 'k1', authorId: 'alice', title: 'Song', status: 'active', visibility: 'public', viewsCount: 0, likesCount: 0, recommendationScore: 58, isFeatured: false });
+    await db.doc('karaokes/k1').set({ id: 'k1', authorId: 'alice', title: 'Song', artist: 'A', lyrics: [], status: 'active', visibility: 'public', viewsCount: 0, likesCount: 0, recommendationScore: 58, isFeatured: false });
+    await db.doc('karaokes/k_unlisted').set({ id: 'k_unlisted', authorId: 'alice', title: 'LinkOnly', artist: 'A', lyrics: [], status: 'active', visibility: 'unlisted', viewsCount: 0, likesCount: 0, recommendationScore: 10, isFeatured: false });
+    await db.doc('karaokes/k_priv').set({ id: 'k_priv', authorId: 'alice', title: 'Secret', artist: 'A', lyrics: [], status: 'active', visibility: 'private', viewsCount: 0, likesCount: 0, recommendationScore: 10, isFeatured: false });
+    await db.doc('karaokes/k_blocked').set({ id: 'k_blocked', authorId: 'alice', title: 'Blocked', artist: 'A', lyrics: [], status: 'blocked', visibility: 'public', viewsCount: 0, likesCount: 0, recommendationScore: 10, isFeatured: false });
     await db.doc('notifications/n1').set({ id: 'n1', userId: 'alice', actorId: 'bob', type: 'like', text: 'hi', createdAt: 'x', read: false });
     await db.doc('downloads/d1').set({ id: 'd1', userId: 'alice', karaokeId: 'k1', title: 'Song', artist: 'A', format: 'reel', createdAt: 'x' });
     await db.doc('events/alice_listen_2026-11-16').set({ id: 'alice_listen_2026-11-16', authorId: 'alice', type: 'listen', day: '2026-11-16', count: 1 });
@@ -42,6 +46,7 @@ beforeEach(async () => {
     await db.doc('follows/alice').set({ id: 'alice', followers: ['bob'] });
     await db.doc('likes/bob').set({ id: 'bob', ids: [] });
     await db.doc('playlists/p1').set({ id: 'p1', ownerId: 'bob', name: 'Mine', karaokeIds: [], createdAt: 'x' });
+    await db.doc('services/aligner').set({ uid: 'svc' });
   });
 });
 
@@ -55,6 +60,25 @@ test('private profile data: owner and admin only', async () => {
   await assertSucceeds(as('admin').collection('userPrivate').get());
   await assertFails(as('bob').collection('userPrivate').get());
   await assertSucceeds(guest().doc('users/alice').get());
+  await assertSucceeds(as('alice').doc('userPrivate/alice').update({ contactEmail: 'contact@x.com' }));
+});
+
+test('track visibility: private and blocked hidden from guests; unlisted get-only', async () => {
+  await assertSucceeds(guest().collection('karaokes').where('status', '==', 'active').where('visibility', '==', 'public').get());
+  await assertFails(guest().collection('karaokes').get());
+  await assertSucceeds(guest().doc('karaokes/k_unlisted').get());
+  await assertFails(guest().doc('karaokes/k_priv').get());
+  await assertFails(as('bob').doc('karaokes/k_priv').get());
+  await assertSucceeds(as('alice').doc('karaokes/k_priv').get());
+  await assertFails(guest().doc('karaokes/k_blocked').get());
+  await assertSucceeds(as('admin').collection('karaokes').get());
+});
+
+test('banned users cannot create content or comments', async () => {
+  const b = as('banned');
+  await assertFails(b.doc('comments/cb').set({ id: 'cb', karaokeId: 'k1', userId: 'banned', userName: 'banned', userAvatar: '', content: 'spam', createdAt: 'x' }));
+  await assertFails(b.doc('karaokes/kb').set({ id: 'kb', authorId: 'banned', title: 'S', artist: 'A', lyrics: [], status: 'active', visibility: 'public', viewsCount: 0, likesCount: 0, recommendationScore: 10, isFeatured: false }));
+  await assertFails(b.doc('users/banned').update({ name: 'Renamed' }));
 });
 
 test('registration: public profile without email, private email from the token', async () => {
@@ -62,6 +86,7 @@ test('registration: public profile without email, private email from the token',
   const pub = { id: 'dave', uid: 'dave', username: 'dave', name: 'Dave', avatar: '', bio: '', role: 'user', status: 'active', createdAt: 'x' };
   await assertFails(dave.doc('users/dave').set({ ...pub, email: 'dave@x.com' }));
   await assertFails(dave.doc('users/dave').set({ ...pub, role: 'admin' }));
+  await assertFails(dave.doc('users/dave').set({ ...pub, username: 'BAD TAG!' }));
   await assertSucceeds(dave.doc('users/dave').set(pub));
   await assertFails(dave.doc('userPrivate/dave').set({ id: 'dave', email: 'other@x.com' }));
   await assertFails(dave.doc('userPrivate/dave').set({ id: 'dave', email: 'dave@x.com', warnings: 0 }));
@@ -108,15 +133,16 @@ test('author stats: +1 by anyone, read by the author', async () => {
   await assertSucceeds(guest().doc(`events/${id}`).set({ id, authorId: 'alice', type: 'listen', day: '2026-11-16', count: inc(1) }, { merge: true }));
   await assertFails(guest().doc(`events/${id}`).set({ id, authorId: 'alice', type: 'listen', day: '2026-11-16', count: inc(5) }, { merge: true }));
   const nid = 'alice_follow_2026-11-17';
-  await assertSucceeds(as('bob').doc(`events/${nid}`).set({ id: nid, authorId: 'alice', type: 'follow', day: '2026-11-17', count: inc(1) }, { merge: true }));
+  await assertSucceeds(as('bob').doc(`events/${nid}`).set({ id, authorId: 'alice', type: 'follow', day: '2026-11-17', count: inc(1) }, { merge: true }));
   await assertFails(guest().doc('events/x').set({ id: 'x', authorId: 'alice', type: 'listen', day: '2026-11-18', count: 1 }));
   await assertFails(guest().collection('events').get());
   await assertSucceeds(as('alice').collection('events').where('authorId', '==', 'alice').get());
 });
 
-test('track counters: one step at a time; other fields stay the author’s', async () => {
+test('track counters: one step at a time; authors cannot self-pump counters', async () => {
   await assertSucceeds(guest().doc('karaokes/k1').update({ viewsCount: inc(1) }));
   await assertFails(guest().doc('karaokes/k1').update({ viewsCount: 100 }));
+  await assertFails(as('alice').doc('karaokes/k1').update({ viewsCount: 10000, title: 'Boosted' }));
   await assertFails(guest().doc('karaokes/k1').update({ likesCount: inc(1) }));
   await assertSucceeds(as('bob').doc('karaokes/k1').update({ likesCount: inc(1) }));
   await assertFails(as('bob').doc('karaokes/k1').update({ likesCount: inc(5) }));
@@ -163,8 +189,8 @@ test('likes and playlists: own only', async () => {
   await assertFails(as('bob').doc('likes/alice').set({ id: 'alice', ids: ['k1'] }));
   await assertFails(guest().doc('likes/bob').get());
   await assertSucceeds(guest().doc('playlists/p1').get());
-  await assertSucceeds(as('bob').doc('playlists/p1').update({ name: 'Renamed' }));
-  await assertFails(as('alice').doc('playlists/p1').update({ name: 'Hacked' }));
+  await assertSucceeds(as('bob').doc('playlists/p1').update({ name: 'Renamed', karaokeIds: [] }));
+  await assertFails(as('alice').doc('playlists/p1').update({ name: 'Hacked', karaokeIds: [] }));
   await assertFails(as('alice').doc('playlists/p2').set({ id: 'p2', ownerId: 'bob', name: 'x', karaokeIds: [], createdAt: 'x' }));
 });
 
@@ -176,4 +202,27 @@ test('genres: everyone reads the list, only admins change it', async () => {
   await assertFails(as('admin').doc('config/genres').set({ id: 'genres', list: ['поп'], extra: true }));
   await assertFails(as('admin').doc('config/aligner').set({ url: 'https://evil.trycloudflare.com' }));
   await assertFails(guest().doc('config/aligner').set({ url: 'https://evil.trycloudflare.com' }));
+});
+
+test('aligner address: only the service account, only a tunnel url and a time', async () => {
+  const svc = as('svc');
+  const now = Date.now();
+  await assertSucceeds(svc.doc('config/aligner').set({ url: 'https://brave-cat-lake.trycloudflare.com', updatedAt: now }));
+  await assertSucceeds(svc.doc('config/aligner').set({ url: '', updatedAt: now }));
+  await assertSucceeds(guest().doc('config/aligner').get());
+  await assertFails(svc.doc('config/aligner').set({ url: 'http://brave-cat-lake.trycloudflare.com', updatedAt: now }));
+  await assertFails(svc.doc('config/aligner').set({ url: 'https://x.trycloudflare.com.evil.com', updatedAt: now }));
+  await assertFails(svc.doc('config/aligner').set({ url: 'https://evil.com/a.trycloudflare.com', updatedAt: now }));
+  await assertFails(svc.doc('config/aligner').set({ url: 'https://evil.com', updatedAt: now }));
+  await assertFails(svc.doc('config/aligner').set({ url: '', updatedAt: String(now) }));
+  await assertFails(svc.doc('config/aligner').set({ url: '', updatedAt: now, extra: true }));
+  await assertFails(svc.doc('config/aligner').delete());
+  await assertFails(svc.doc('config/genres').set({ id: 'genres', list: ['spam'] }));
+  await assertFails(as('alice').doc('config/aligner').set({ url: '', updatedAt: now }));
+  await assertFails(as('admin').doc('config/aligner').set({ url: '', updatedAt: now }));
+  await assertFails(guest().doc('config/aligner').set({ url: '', updatedAt: now }));
+  await assertFails(svc.doc('services/aligner').get());
+  await assertFails(svc.doc('services/aligner').set({ uid: 'svc' }));
+  await assertFails(as('alice').doc('services/aligner').set({ uid: 'alice' }));
+  await assertFails(as('admin').doc('services/aligner').set({ uid: 'admin' }));
 });

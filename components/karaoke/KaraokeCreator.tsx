@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Karaoke, LyricLine, Visibility } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
-import { saveKaraoke, updateKaraoke, getKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid, getGenres, MAX_GENRES } from '@/lib/storage';
+import { saveKaraoke, updateKaraoke, getKaraokeById, fetchKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid, getGenres, MAX_GENRES } from '@/lib/storage';
+import { pluralRu, safeMediaUrl } from '@/lib/format';
 import { isBlobRef, putBlob, resolveBlobUrl } from '@/lib/blob-store';
 import {
   DEFAULT_FONTS,
@@ -110,6 +111,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
 
   // Step 4
   const [visibility, setVisibility] = useState<Visibility>('public');
+  const [rightsConfirmed, setRightsConfirmed] = useState(!!editId);
 
   const [previewLineIndex, setPreviewLineIndex] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
@@ -138,45 +140,53 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const [editState, setEditState] = useState<'none' | 'loaded' | 'denied'>('none');
   useEffect(() => {
     if (!editId || isLoading) return;
-    const k = getKaraokeById(editId);
-    if (!k || !user || (k.authorId !== user.id && user.role !== 'admin')) {
-      setEditState('denied');
-      return;
-    }
-    setTitle(k.title);
-    setArtist(k.artist);
-    setDescription(k.description || '');
-    setGenres(k.tags.filter((t) => t !== 'караоке'));
-    setCoverImage(k.style.coverImage);
-    if (k.audioUrl) {
-      setAudioRef(k.audioUrl);
-      setAudioName('загруженный трек');
-      void resolveBlobUrl(k.audioUrl).then(setAudioUrl);
-    } else setDemoAudio(true);
-    setAudioDuration(k.duration || 0);
-    const loaded = k.lyrics.map((l, i) => ({
-      id: l.id || `l-${i}`,
-      text: l.text,
-      time: l.time,
-      end: l.end ?? k.lyrics[i + 1]?.time ?? l.time + 4,
-    }));
-    setLines(loaded);
-    setRawText(loaded.map((l) => l.text).join('\n'));
-    setFont(k.style.font || 'Onest');
-    setFontFile(k.style.fontFile);
-    if (k.style.fontFile) void loadCustomFont(k.style.font, k.style.fontFile).catch(() => {});
-    else loadGoogleFont(k.style.font || 'Onest');
-    setActiveColor(k.style.activeColor);
-    setTextColor(k.style.textColor);
-    setBackgroundColor(k.style.backgroundColor);
-    setFontSize(k.style.fontSizePx || 32);
-    setFillAnimation(k.style.fillAnimation !== false);
-    setAspectRatio(k.style.aspectRatio === '16:9' || k.style.aspectRatio === 'h' ? 'h' : 'v');
-    setTextY(k.style.textY ?? 50);
-    setVisibility(k.visibility);
-    setEditState('loaded');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editId, isLoading, user?.id]);
+    let alive = true;
+    void (async () => {
+      const k = getKaraokeById(editId) ?? (await fetchKaraokeById(editId));
+      if (!alive) return;
+      if (!k || !user || (k.authorId !== user.id && user.role !== 'admin')) {
+        setEditState('denied');
+        return;
+      }
+      setTitle(k.title);
+      setArtist(k.artist);
+      setDescription(k.description || '');
+      setGenres(k.tags.filter((t) => t !== 'караоке'));
+      setCoverImage(k.style.coverImage);
+      if (k.audioUrl) {
+        setAudioRef(k.audioUrl);
+        setAudioName('загруженный трек');
+        const resolved = await resolveBlobUrl(k.audioUrl);
+        if (alive) setAudioUrl(resolved);
+      } else setDemoAudio(true);
+      setAudioDuration(k.duration || 0);
+      const loaded = k.lyrics.map((l, i) => ({
+        id: l.id || `l-${i}`,
+        text: l.text,
+        time: l.time,
+        end: l.end ?? k.lyrics[i + 1]?.time ?? l.time + 4,
+      }));
+      setLines(loaded);
+      setRawText(loaded.map((l) => l.text).join('\n'));
+      setFont(k.style.font || 'Onest');
+      setFontFile(k.style.fontFile);
+      if (k.style.fontFile) void loadCustomFont(k.style.font, k.style.fontFile).catch(() => {});
+      else loadGoogleFont(k.style.font || 'Onest');
+      setActiveColor(k.style.activeColor);
+      setTextColor(k.style.textColor);
+      setBackgroundColor(k.style.backgroundColor);
+      setFontSize(k.style.fontSizePx || 32);
+      setFillAnimation(k.style.fillAnimation !== false);
+      setAspectRatio(k.style.aspectRatio === '16:9' || k.style.aspectRatio === 'h' ? 'h' : 'v');
+      setTextY(k.style.textY ?? 50);
+      setVisibility(k.visibility);
+      setRightsConfirmed(true);
+      setEditState('loaded');
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [editId, isLoading, user]);
 
   const knownArtists = useMemo(
     () => (typeof window === 'undefined' ? [] : [...new Set(getKaraokes().map((k) => k.artist))]),
@@ -309,7 +319,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       return showToast(
         (await localAccessState()) === 'denied'
           ? LOCAL_ACCESS_HINT
-          : 'Сервис авто-тайминга не запущен: запустите aligner/start.ps1 на компьютере'
+          : 'Авто-тайминг сейчас недоступен — расставьте тайминги вручную или загрузите файл .lrc'
       );
     }
     if (lines.some((l) => l.time > 0) && !window.confirm('Заменить текущие тайминги автоматическими?')) return;
@@ -412,12 +422,6 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     return lo > hi ? (ZONE_TOP + ZONE_BOTTOM) / 2 : clamp(c, lo, hi);
   };
 
-  // Re-clamp whenever the block's size changes (font size / format).
-  useEffect(() => {
-    setTextY((y) => clampCenter(y));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fontSize, aspectRatio, lines.length]);
-
   const onDragStart = (e: React.PointerEvent) => {
     const f = frameRef.current;
     const b = blockRef.current;
@@ -480,6 +484,9 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       showToast('Добавьте текст песни');
       return setStep(1);
     }
+    if (visibility !== 'private' && !rightsConfirmed) {
+      return showToast('Подтвердите соблюдение авторских прав и правил платформы');
+    }
 
     // Reuse the spelling of an artist that already exists, so "queen" and "Queen" share one page.
     const existingArtist = knownArtists.find((a) => artistSlug(a) === artistSlug(artist));
@@ -530,7 +537,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     showToast(
       visibility === 'public' ? 'Опубликовано!' : visibility === 'unlisted' ? 'Сохранено: доступно по ссылке' : 'Сохранено: видите только вы'
     );
-    setTimeout(() => router.push(`/karaoke/${newKaraoke.id}`), 900);
+    setTimeout(() => router.push(`/karaoke/${encodeURIComponent(newKaraoke.id)}`), 900);
   };
 
   // ---------- Preview ----------
@@ -723,9 +730,9 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                     <div className="fld">
                       Обложка (по желанию)
                       <div className="row">
-                        {coverImage && (
+                        {safeMediaUrl(coverImage) && (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={coverImage} alt="" className="av md" style={{ borderRadius: 10 }} />
+                          <img src={safeMediaUrl(coverImage)} alt="" className="av md" style={{ borderRadius: 10 }} />
                         )}
                         <label className="bt sm" style={{ cursor: 'pointer' }}>
                           {coverImage ? 'Заменить' : 'Загрузить обложку'}
@@ -813,7 +820,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                     ))}
                     {timingProblems > 0 && (
                       <p className="sm" style={{ color: '#f87171', marginBottom: 0 }}>
-                        У {timingProblems} строк конец раньше начала — заливка для них растянется до следующей строки.
+                        У {pluralRu(timingProblems, 'строки', 'строк', 'строк', true)} конец раньше начала — заливка для них растянется до следующей строки.
                       </p>
                     )}
                     <p className="mu sm" style={{ marginBottom: 0 }}>
@@ -915,6 +922,20 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                       <div><b>{label}</b><span>{text}</span></div>
                     </div>
                   ))}
+                  {visibility !== 'private' && (
+                    <label className="row sm" style={{ gap: 10, alignItems: 'flex-start', cursor: 'pointer', marginTop: 4 }}>
+                      <input
+                        type="checkbox"
+                        checked={rightsConfirmed}
+                        onChange={(e) => setRightsConfirmed(e.target.checked)}
+                        style={{ accentColor: 'var(--ac)', width: 18, height: 18, marginTop: 2, flex: 'none' }}
+                      />
+                      <span className="mu sm" style={{ lineHeight: 1.45 }}>
+                        Подтверждаю, что загружаемые материалы не нарушают права третьих лиц, и соглашаюсь с{' '}
+                        <Link href="/terms" style={{ color: 'var(--ac)' }}>правилами платформы</Link>.
+                      </span>
+                    </label>
+                  )}
                 </div>
                 <div className="row">
                   <button className="bt pr" onClick={handlePublish}>

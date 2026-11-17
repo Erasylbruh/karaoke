@@ -129,7 +129,7 @@
 /* Tutorial */
 .tut { position: fixed; z-index: 120; right: clamp(12px, 3vw, 32px); bottom: clamp(12px, 3vw, 32px); width: min(360px, calc(100vw - 24px)); background: var(--s1); border: 1px solid var(--ac); border-radius: 20px; padding: 20px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6); }
 .tut small { color: var(--ac); font-weight: 600; letter-spacing: 0.04em; }
-.tut h4 { font: 700 17px var(--fd); margin: 6px 0 8px; }
+.tut h4, .tut .tut-h { display: block; font: 700 17px var(--fd); margin: 6px 0 8px; }
 .tut p { margin: 0 0 16px; color: var(--mu); font-size: 14px; }
 .tut .ft { display: flex; align-items: center; gap: 10px; position: static; font-size: inherit; opacity: 1; }
 .tut .skip { background: none; border: 0; color: var(--mu); font-size: 12px; opacity: 0.6; padding: 6px; }
@@ -274,7 +274,7 @@
   margin: 0 0 max(20px, env(safe-area-inset-bottom)) max(clamp(20px, 4vw, 56px), env(safe-area-inset-left));
   padding: 12px 14px;
   border-radius: 18px;
-  background: rgba(9, 9, 11, 0.55);
+  background: rgba(9, 9, 11, 0.78);
   border: 1px solid rgba(255, 255, 255, 0.1);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
@@ -309,7 +309,7 @@
 #player .pc input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--pact, var(--ac)); border: 0; }
 #player .pc input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--pact, var(--ac)); border: 0; }
 #player .pc input[type="range"]:focus-visible { outline: 2px solid var(--pact, var(--ac)); outline-offset: 2px; border-radius: 4px; }
-#player .player-times { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: rgba(244, 244, 245, 0.75); font-variant-numeric: tabular-nums; }
+#player .player-times { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #f4f4f5; font-variant-numeric: tabular-nums; }
 #player .player-times-end { display: inline-flex; align-items: center; gap: 8px; }
 #player .player-fs { width: 26px; height: 26px; margin: -4px -4px -4px 0; border: 0; border-radius: 7px; background: transparent; color: inherit; display: grid; place-items: center; }
 #player .player-fs:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
@@ -580,3 +580,14 @@ button.chip:hover { border-color: var(--mu); }
   color: transparent;
   animation: w 2.4s linear infinite;
 }
+
+/* Site footer */
+.site-ft { margin-top: auto; border-top: 1px solid var(--ln); background: var(--bg); color: var(--mu); }
+.site-ft-in { max-width: 1200px; margin: 0 auto; padding: 36px clamp(16px, 4vw, 40px) 28px; }
+.site-ft-grid { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 28px; }
+.site-ft-h { font: 600 12px var(--fb); text-transform: uppercase; letter-spacing: 0.06em; color: var(--tx); margin: 0 0 12px; }
+.site-ft-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.site-ft-list a { color: var(--mu); text-decoration: none; transition: color 0.15s; }
+.site-ft-list a:hover { color: var(--ac); }
+.site-ft-bottom { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--ln); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--mu); }
+@media (max-width: 720px) { .site-ft-grid { grid-template-columns: 1fr; gap: 22px; } }

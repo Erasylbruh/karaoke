@@ -32,12 +32,12 @@ function linkFor(n: AppNotification): string | null {
   if (n.type === 'warning' && n.karaokeId) {
     const project = getKaraokeById(n.karaokeId);
     if (!project || project.status === 'deleted') return null;
-    if (project.status === 'blocked') return `/edit/${n.karaokeId}`;
+    if (project.status === 'blocked') return `/edit/${encodeURIComponent(n.karaokeId)}`;
   }
-  if (n.karaokeId) return `/karaoke/${n.karaokeId}${n.commentId ? `#c-${n.commentId}` : ''}`;
+  if (n.karaokeId) return `/karaoke/${encodeURIComponent(n.karaokeId)}${n.commentId ? `#c-${encodeURIComponent(n.commentId)}` : ''}`;
   if (n.type === 'follow' && n.actorId) {
     const u = getUserById(n.actorId);
-    return u ? `/u/${u.username}` : null;
+    return u ? `/u/${encodeURIComponent(u.username)}` : null;
   }
   return null;
 }

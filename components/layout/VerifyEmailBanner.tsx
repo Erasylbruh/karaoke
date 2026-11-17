@@ -29,7 +29,7 @@ export default function VerifyEmailBanner() {
   return (
     <div className="verify-bar" role="status">
       <span>
-        Подтвердите почту: мы отправили ссылку на <b>{authEmail}</b>. Без этого не получится восстановить пароль, если вы его забудете.
+        Подтвердите почту: мы отправили ссылку на <b>{authEmail}</b>. Подтверждённый адрес защищает аккаунт и нужен для полноценной работы с публикациями.
         {note && <span className="mu"> {note}</span>}
       </span>
       <span className="row" style={{ gap: 8 }}>

@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useMemo, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Karaoke } from '@/lib/types';
 import { getPublicKaraokes, getAuthor } from '@/lib/storage';
+import { useDataVersion } from '@/components/DataProvider';
 import KaraokeTile from '@/components/karaoke/KaraokeTile';
 import Tutorial from '@/components/ui/Tutorial';
 
@@ -26,25 +26,21 @@ const RECOMMENDED_COUNT = 6;
 
 function CatalogContent() {
   const searchParams = useSearchParams();
-  const initialSearch = searchParams.get('search') || '';
+  const urlSearch = searchParams.get('search') || '';
+  const version = useDataVersion();
 
-  const [karaokes, setKaraokes] = useState<Karaoke[]>([]);
-  const [searchQuery, setSearchQuery] = useState(initialSearch);
+  const [searchInput, setSearchInput] = useState<string | null>(null);
+  const searchQuery = searchInput ?? urlSearch;
   const [sort, setSort] = useState<Sort>('pop');
   const [tickerIndex, setTickerIndex] = useState(0);
 
-  useEffect(() => {
-    setKaraokes(getPublicKaraokes());
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const karaokes = useMemo(() => getPublicKaraokes(), [version]);
 
   useEffect(() => {
     const timer = setInterval(() => setTickerIndex((prev) => (prev + 1) % TICKER_LINES.length), 4000);
     return () => clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    if (searchParams.get('search')) setSearchQuery(searchParams.get('search') || '');
-  }, [searchParams]);
 
   const filteredKaraokes = useMemo(() => {
     const k = searchQuery.trim().toLowerCase();
@@ -55,15 +51,14 @@ function CatalogContent() {
 
     switch (sort) {
       case 'pop':
-        return result.sort((a, b) => b.viewsCount - a.viewsCount);
+        return [...result].sort((a, b) => b.viewsCount - a.viewsCount);
       case 'new':
-        return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        return [...result].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       case 'old':
-        return result.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        return [...result].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     }
   }, [karaokes, searchQuery, sort]);
 
-  // Tracks that reached the threshold; if there are none yet, the ones closest to it by score.
   const recommended = useMemo(() => {
     const byScore = [...karaokes].sort((a, b) => b.recommendationScore - a.recommendationScore);
     const featured = byScore.filter((x) => x.isFeatured);
@@ -82,8 +77,8 @@ function CatalogContent() {
       <Tutorial
         page="home"
         steps={[
-          { title: 'Каталог караоке', text: 'Наведите курсор на обложку: строки песни запустятся как беззвучное караоке.' },
-          { title: 'Поиск и сортировка', text: 'Ищите по названию, исполнителю или жанру. «Рекомендованные» — треки, которые набрали популярность у слушателей.' },
+          { title: 'Каталог караоке', text: 'На компьютере наведите на карточку, а на телефоне просто листайте ленту — строки песни оживут прямо на обложке.' },
+          { title: 'Поиск и сортировка', text: 'Ищите по названию, исполнителю или жанру. «Рекомендованные» — треки, которые набрали отклик у слушателей.' },
           { title: 'Свои караоке', text: 'Кнопка «Создать» в шапке открывает редактор: загрузите трек, расставьте тайминги и опубликуйте.' },
         ]}
       />
@@ -101,7 +96,7 @@ function CatalogContent() {
               placeholder="Найти песню, артиста или жанр"
               aria-label="Поиск"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
           </label>
         </div>

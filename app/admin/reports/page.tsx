@@ -5,7 +5,7 @@ import Link from 'next/link';
 import ProjectWarningDialog from '@/components/admin/ProjectWarningDialog';
 import Tabs from '@/components/ui/Tabs';
 import { useAuth } from '@/context/AuthContext';
-import { REPORT_OPTIONS, REPORT_TYPES, reviewProjectReport, subscribeProjectReports, type ProjectReport, type ReportType } from '@/lib/project-moderation';
+import { REPORT_OPTIONS, REPORT_TYPES, reviewProjectReport, subscribeProjectReports, timestampToDate, type ProjectReport, type ReportType } from '@/lib/project-moderation';
 import { getKaraokeById, getUserById } from '@/lib/storage';
 import type { Karaoke } from '@/lib/types';
 
@@ -84,10 +84,10 @@ function ProjectReports({ moderatorId }: { moderatorId: string }) {
               <li key={report.id} className="card p-4">
                 <div className="row">
                   <span className="pill wn">{REPORT_TYPES[report.type]}</span>
-                  <time className="mu sm">{report.createdAt.toDate().toLocaleString('ru-RU')}</time>
+                  <time className="mu sm">{timestampToDate(report.createdAt).toLocaleString('ru-RU')}</time>
                 </div>
                 <h2 className="mt-2 font-semibold wrap-anywhere">
-                  {available ? <Link className="lk" href={`/karaoke/${project.id}`}>{project.title}</Link> : report.karaokeTitle}
+                  {available ? <Link className="lk" href={`/karaoke/${encodeURIComponent(project.id)}`}>{project.title}</Link> : report.karaokeTitle}
                 </h2>
                 {!available && <p className="mu sm">Проект удалён или недоступен</p>}
                 <p className="mu sm">
@@ -96,7 +96,7 @@ function ProjectReports({ moderatorId }: { moderatorId: string }) {
                 {report.details && <p className="mt-2 whitespace-pre-wrap wrap-anywhere">{report.details}</p>}
                 {report.reviewedAt && (
                   <p className="mu sm mt-2">
-                    Рассмотрена {report.reviewedAt.toDate().toLocaleString('ru-RU')}{reviewedBy ? ` · @${reviewedBy.username}` : ''}
+                    Рассмотрена {timestampToDate(report.reviewedAt).toLocaleString('ru-RU')}{reviewedBy ? ` · @${reviewedBy.username}` : ''}
                   </p>
                 )}
                 <div className="row mt-3">

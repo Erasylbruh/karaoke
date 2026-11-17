@@ -119,6 +119,8 @@ export interface User {
   name: string;
   /** Private: stored in userPrivate/{id}, present only for the owner and admins. */
   email?: string;
+  /** Private draft of the contact email when `contacts.showEmail` is false (stored in userPrivate/{id}). */
+  contactEmail?: string;
   avatar: string;
   bio?: string;
   contacts?: UserContacts;
@@ -126,6 +128,8 @@ export interface User {
   status?: UserStatus;
   warnings?: number;
   banUntil?: string;
+  /** Epoch milliseconds matching `banUntil`, so Firestore rules can check temporary ban expiry. */
+  banUntilMs?: number;
   banReason?: string;
   /** Pages whose walkthrough this person has already seen (synced across devices). */
   seenTutorials?: string[];

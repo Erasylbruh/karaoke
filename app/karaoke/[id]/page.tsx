@@ -7,6 +7,7 @@ import { useParams } from 'next/navigation';
 import { Karaoke } from '@/lib/types';
 import {
   getKaraokeById,
+  fetchKaraokeById,
   canViewKaraoke,
   toggleKaraokeLike,
   hasUserLiked,
@@ -29,6 +30,7 @@ import { useAuth } from '@/context/AuthContext';
 import { synthPlayer } from '@/lib/audio-synthesizer';
 import { isBlobRef, resolveBlobUrl, uploadLocalBlob } from '@/lib/blob-store';
 import { ensureStyleFont, fontCss } from '@/lib/fonts';
+import { cssUrl, safeColor, safeDecode } from '@/lib/format';
 import { useDownloads } from '@/context/DownloadsContext';
 import { QUALITY_OPTIONS, getPreferredQuality, setPreferredQuality } from '@/lib/video-render';
 import type { ExportFormat, VideoQuality } from '@/lib/video-render';
@@ -143,15 +145,8 @@ const mm = (s: number) =>
 function KaraokePlayerContent() {
   const params = useParams();
   const { user, openAuthPrompt } = useAuth();
-  // Ids made from Cyrillic titles arrive percent-encoded.
   const rawId = (params?.id as string) || '';
-  const id = (() => {
-    try {
-      return decodeURIComponent(rawId);
-    } catch {
-      return rawId;
-    }
-  })();
+  const id = safeDecode(rawId);
 
   const [karaoke, setKaraoke] = useState<Karaoke | null>(null);
   const [denied, setDenied] = useState(false);
@@ -168,9 +163,9 @@ function KaraokePlayerContent() {
   const [following, setFollowing] = useState(false);
   const [isSmall, setIsSmall] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [canFullscreen, setCanFullscreen] = useState(false);
+  const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled;
   const [highlightId, setHighlightId] = useState<string | null>(null);
-  useDataVersion(); // playlist state and review count stay live
+  const version = useDataVersion(); // playlist state, author tracks and review count stay live
   const [guestLeft, setGuestLeft] = useState(GUEST_PLAY_LIMIT);
 
   const actionsRef = useRef<HTMLDialogElement>(null);
@@ -178,12 +173,12 @@ function KaraokePlayerContent() {
   const playerRef = useRef<HTMLElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timeRef = useRef(0);
+  const lastAudioTimeRef = useRef(0);
   const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
   const linesRef = useRef<(HTMLParagraphElement | null)[]>([]);
   const activeLineIndexRef = useRef<number>(-2);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const finishedRef = useRef(false);
-  // Seconds actually played in this run (seeking doesn't add time) and whether the listen was counted.
   const heardRef = useRef(0);
   const listenCountedRef = useRef(false);
 
@@ -203,23 +198,31 @@ function KaraokePlayerContent() {
 
   useEffect(() => {
     if (!id) return;
-    const item = getKaraokeById(id);
-    if (!item || !canViewKaraoke(item, user)) {
-      setKaraoke(null);
-      setDenied(true);
-      return;
-    }
-    setDenied(false);
-    setKaraoke(item);
-    setDuration(item.duration || 40);
-    setLikesCount(item.likesCount);
-    setIsLiked(hasUserLiked(item.id, user?.id));
-    setFollowing(isFollowing(user?.id, item.authorId));
-    setGuestLeft(guestPlaysLeft(item.id));
-    ensureStyleFont(item.style);
-    resolveBlobUrl(item.audioUrl).then(setAudioSrc);
+    let alive = true;
+    void (async () => {
+      const item = getKaraokeById(id) ?? (await fetchKaraokeById(id));
+      if (!alive) return;
+      if (!item || !canViewKaraoke(item, user)) {
+        setKaraoke(null);
+        setDenied(true);
+        return;
+      }
+      setDenied(false);
+      setKaraoke(item);
+      setDuration(item.duration || 40);
+      setLikesCount(item.likesCount);
+      setIsLiked(hasUserLiked(item.id, user?.id));
+      setFollowing(isFollowing(user?.id, item.authorId));
+      setGuestLeft(guestPlaysLeft(item.id));
+      ensureStyleFont(item.style);
+      const resolved = await resolveBlobUrl(item.audioUrl);
+      if (alive) setAudioSrc(resolved);
+    })();
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, user?.id]);
+  }, [id, user?.id, version]);
 
   // A new track starts a fresh listen. Keyed on the id only: the sign-in finishing loading
   // (user?.id changing) must not reset it, or one run could be counted twice.
@@ -273,12 +276,14 @@ function KaraokePlayerContent() {
         return;
       }
       setTime(next);
-      // A listen counts once the person has really heard LISTEN_SHARE of the track.
-      heardRef.current += Math.min(dt, 0.5);
-      if (!listenCountedRef.current && heardRef.current >= duration * LISTEN_SHARE) {
-        listenCountedRef.current = true;
-        registerInteraction(karaoke.id, actorId, 'listen');
-        registerListen(karaoke.id, actorId);
+      // For synth-only tracks without an <audio> element, accumulate heard time here.
+      if (!hasAudio) {
+        heardRef.current += Math.min(dt, 0.5);
+        if (!listenCountedRef.current && heardRef.current >= duration * LISTEN_SHARE) {
+          listenCountedRef.current = true;
+          registerInteraction(karaoke.id, actorId, 'listen');
+          registerListen(karaoke.id, actorId);
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -360,15 +365,19 @@ function KaraokePlayerContent() {
   // A link like /karaoke/{id}#c-{commentId} (from a reply notification) opens the reviews on that comment.
   useEffect(() => {
     if (!karaoke) return;
-    const m = window.location.hash.match(/^#c-(.+)$/);
-    if (!m) return;
-    setHighlightId(decodeURIComponent(m[1]));
-    reviewsRef.current?.showModal();
+    const openFromHash = () => {
+      const m = window.location.hash.match(/^#c-(.+)$/);
+      if (!m) return;
+      setHighlightId(safeDecode(m[1]));
+      reviewsRef.current?.showModal();
+    };
+    queueMicrotask(openFromHash);
+    window.addEventListener('hashchange', openFromHash);
+    return () => window.removeEventListener('hashchange', openFromHash);
   }, [karaoke]);
 
   // Fullscreen (not available on iPhone Safari, so the button is hidden there).
   useEffect(() => {
-    setCanFullscreen(!!document.fullscreenEnabled);
     const onChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onChange);
     return () => document.removeEventListener('fullscreenchange', onChange);
@@ -545,9 +554,10 @@ function KaraokePlayerContent() {
   }
 
   const author = getAuthor(karaoke);
-  const bg = karaoke.style?.backgroundColor || '#1d1b3a';
-  const ac = karaoke.style?.activeColor || '#ffb547';
-  const cover = karaoke.style?.coverImage;
+  const bg = safeColor(karaoke.style?.backgroundColor, '#1d1b3a');
+  const ac = safeColor(karaoke.style?.activeColor, '#ffb547');
+  const ptx = safeColor(karaoke.style?.textColor, '#f4f4f5');
+  const coverBg = cssUrl(karaoke.style?.coverImage);
 
   let activeIdx = -1;
   karaoke.lyrics.forEach((l, i) => {
@@ -660,7 +670,7 @@ function KaraokePlayerContent() {
           {
             '--pbg': bg,
             '--pact': ac,
-            '--ptx': karaoke.style?.textColor || '#f4f4f5',
+            '--ptx': ptx,
             '--pf': fontCss(karaoke.style?.font || 'Onest'),
           } as React.CSSProperties
         }
@@ -670,6 +680,39 @@ function KaraokePlayerContent() {
             ref={audioRef}
             src={audioSrc}
             preload="auto"
+            onPlay={(e) => {
+              lastAudioTimeRef.current = e.currentTarget.currentTime;
+            }}
+            onSeeked={(e) => {
+              lastAudioTimeRef.current = e.currentTarget.currentTime;
+            }}
+            onTimeUpdate={(e) => {
+              // Works in background tabs too, where requestAnimationFrame is throttled.
+              const nowT = e.currentTarget.currentTime;
+              const delta = nowT - lastAudioTimeRef.current;
+              lastAudioTimeRef.current = nowT;
+              if (delta > 0 && delta <= 1.5) {
+                heardRef.current += delta;
+                if (!listenCountedRef.current && heardRef.current >= duration * LISTEN_SHARE) {
+                  listenCountedRef.current = true;
+                  registerInteraction(karaoke.id, actorId, 'listen');
+                  registerListen(karaoke.id, actorId);
+                }
+              }
+              if (typeof document !== 'undefined' && document.hidden) {
+                setTime(nowT);
+              }
+            }}
+            onEnded={() => {
+              setIsPlaying(false);
+              setTime(0);
+              heardRef.current = 0;
+              listenCountedRef.current = false;
+              if (!finishedRef.current) {
+                finishedRef.current = true;
+                registerInteraction(karaoke.id, actorId, 'finish');
+              }
+            }}
             onLoadedMetadata={(e) => {
               const d = e.currentTarget.duration;
               if (Number.isFinite(d) && d > 0) setDuration(d);
@@ -680,7 +723,6 @@ function KaraokePlayerContent() {
         <aside
           className={`pi ${isSmall ? 'sm' : ''}`}
           onClick={(e) => {
-            // Tapping the collapsed header (not its buttons or links) opens it.
             if (isSmall && !(e.target as HTMLElement).closest('button, a, dialog')) setIsSmall(false);
           }}
         >
@@ -690,11 +732,11 @@ function KaraokePlayerContent() {
           </Link>
 
           <div
-            className={`cv ${cover ? 'img' : ''}`}
+            className={`cv ${coverBg ? 'img' : ''}`}
             id="pcv"
-            style={{ backgroundImage: cover ? `url(${cover})` : `linear-gradient(145deg, ${bg}, ${ac})` }}
+            style={{ backgroundImage: coverBg ?? `linear-gradient(145deg, ${bg}, ${ac})` }}
           >
-            {!cover && karaoke.title[0]}
+            {!coverBg && karaoke.title[0]}
           </div>
 
           <div className="tx">

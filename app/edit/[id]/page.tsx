@@ -2,15 +2,10 @@
 
 import { useParams } from 'next/navigation';
 import KaraokeCreator from '@/components/karaoke/KaraokeCreator';
+import { safeDecode } from '@/lib/format';
 
 export default function EditKaraokePage() {
   const params = useParams();
-  const raw = (params?.id as string) || '';
-  let id = raw;
-  try {
-    id = decodeURIComponent(raw);
-  } catch {
-    /* keep raw */
-  }
+  const id = safeDecode(params?.id as string);
   return <KaraokeCreator editId={id} />;
 }

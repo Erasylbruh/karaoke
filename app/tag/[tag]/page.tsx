@@ -1,21 +1,24 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useMemo } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { Karaoke } from '@/lib/types';
 import { getKaraokesByTag, getAuthor } from '@/lib/storage';
+import { safeDecode } from '@/lib/format';
+import { useDataVersion } from '@/components/DataProvider';
 import KaraokeTile from '@/components/karaoke/KaraokeTile';
 
 /** All public karaokes with one genre tag, laid out like the catalog. */
 export default function TagPage() {
   const params = useParams();
-  const tag = decodeURIComponent((params?.tag as string) || '');
-  const [items, setItems] = useState<Karaoke[]>([]);
+  const tag = safeDecode(params?.tag as string);
+  const version = useDataVersion();
 
-  useEffect(() => {
-    setItems(getKaraokesByTag(tag).sort((a, b) => b.recommendationScore - a.recommendationScore));
-  }, [tag]);
+  const items = useMemo(
+    () => getKaraokesByTag(tag).sort((a, b) => b.recommendationScore - a.recommendationScore),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tag, version]
+  );
 
   return (
     <div className="pg">

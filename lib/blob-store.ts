@@ -1,15 +1,13 @@
 /**
- * Storage for large user uploads (audio, fonts).
+ * Storage for large user uploads (audio, covers, custom fonts).
  *
- * Files go to a public Supabase Storage bucket and the public URL is stored on the karaoke.
- * If Supabase is not configured (no NEXT_PUBLIC_SUPABASE_* env) or the upload fails, the file falls
- * back to this browser's IndexedDB with an `idb:<id>` reference, which only this browser can play.
+ * Preferred path: authenticated server upload via `/api/storage/upload` (verifies Firebase ID token
+ * and writes with SUPABASE_SERVICE_ROLE_KEY). When the server key is not set yet (HTTP 501), falls
+ * back to direct Supabase upload with the publishable key, or to IndexedDB (`idb:<id>`) offline.
  */
 import { auth } from './firebase';
+import { safeMediaUrl } from './format';
 
-// Defaults keep uploads working when the hosting has no env vars set (that is how files ended up
-// only in the author's browser). A publishable key is public by design, like the Firebase config:
-// the bucket's policies decide what it may do (insert + public read only).
 const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://alspedwglexctjkztcof.supabase.co').replace(/\/+$/, '');
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_jypnDexN-2p-3V48-y2F8Q_Hhciy5lc';
 const BUCKET = process.env.NEXT_PUBLIC_SUPABASE_BUCKET || 'uploads';
@@ -18,18 +16,85 @@ export const supabaseConfigured = !!SUPABASE_URL && !!SUPABASE_KEY;
 /** Upload progress callback: share of the file sent, 0..1. */
 export type UploadProgress = (share: number) => void;
 
-/**
- * Uploads through the Storage REST API and returns the public URL.
- * XMLHttpRequest instead of fetch, because only it reports upload progress.
- */
-function uploadToSupabase(file: Blob, path: string, onProgress?: UploadProgress): Promise<string> {
+const EXT_MIMES: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  opus: 'audio/opus',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  webm: 'audio/webm',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+};
+
+/** Infers a strict MIME type when the browser leaves `file.type` empty (common for .ttf/.woff2). */
+async function inferMimeType(file: Blob, folder: string): Promise<string> {
+  if (file.type && file.type !== 'application/octet-stream') return file.type;
+  const named = (file as File).name;
+  if (named) {
+    const ext = named.split('.').pop()?.toLowerCase() || '';
+    if (EXT_MIMES[ext]) return EXT_MIMES[ext];
+  }
+  if (file.size >= 4) {
+    const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+    const tag = String.fromCharCode(...head);
+    if (tag === 'wOFF') return 'font/woff';
+    if (tag === 'wOF2') return 'font/woff2';
+    if (tag === 'OTTO') return 'font/otf';
+    if (tag === 'true' || (head[0] === 0 && head[1] === 1 && head[2] === 0 && head[3] === 0)) return 'font/ttf';
+  }
+  if (folder === 'covers') return 'image/jpeg';
+  if (folder === 'fonts') return 'font/ttf';
+  return 'audio/mpeg';
+}
+
+type ServerUploadResult = { kind: 'ok'; url: string } | { kind: 'unconfigured' } | { kind: 'error'; error: Error };
+
+function uploadViaServerRoute(
+  file: Blob,
+  folder: string,
+  mimeType: string,
+  idToken: string,
+  onProgress?: UploadProgress
+): Promise<ServerUploadResult> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/storage/upload?folder=${encodeURIComponent(folder)}`);
+    xhr.setRequestHeader('Authorization', `Bearer ${idToken}`);
+    xhr.setRequestHeader('Content-Type', mimeType);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    xhr.onload = () => {
+      if (xhr.status === 501) return resolve({ kind: 'unconfigured' });
+      try {
+        const data = JSON.parse(xhr.responseText) as { url?: string; error?: string };
+        if (xhr.status >= 200 && xhr.status < 300 && data.url) {
+          return resolve({ kind: 'ok', url: data.url });
+        }
+        return resolve({ kind: 'error', error: new Error(data.error || `Upload HTTP ${xhr.status}`) });
+      } catch {
+        return resolve({ kind: 'error', error: new Error(`Upload HTTP ${xhr.status}`) });
+      }
+    };
+    xhr.onerror = () => resolve({ kind: 'error', error: new Error('Сеть недоступна') });
+    xhr.send(file);
+  });
+}
+
+function uploadDirectToSupabase(file: Blob, path: string, mimeType: string, onProgress?: UploadProgress): Promise<string> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`);
     xhr.setRequestHeader('apikey', SUPABASE_KEY);
-    // New-style keys (sb_publishable_…) are not JWTs and go in `apikey` only; legacy anon keys also need the Bearer header.
     if (!SUPABASE_KEY.startsWith('sb_')) xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_KEY}`);
-    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('Content-Type', mimeType);
     xhr.setRequestHeader('x-upsert', 'false');
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
     xhr.onload = () =>
@@ -39,6 +104,26 @@ function uploadToSupabase(file: Blob, path: string, onProgress?: UploadProgress)
     xhr.onerror = () => reject(new Error('Сеть недоступна'));
     xhr.send(file);
   });
+}
+
+async function uploadCloudBlob(file: Blob, folder: string, onProgress?: UploadProgress): Promise<string> {
+  const safeFolder = ['audio', 'covers', 'fonts', 'uploads'].includes(folder) ? folder : 'uploads';
+  const mimeType = await inferMimeType(file, safeFolder);
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    try {
+      const token = await currentUser.getIdToken();
+      const serverRes = await uploadViaServerRoute(file, safeFolder, mimeType, token, onProgress);
+      if (serverRes.kind === 'ok') return serverRes.url;
+      if (serverRes.kind === 'error') throw serverRes.error;
+    } catch (e) {
+      // Only rethrow auth/ban rejections; fall back if route is unreachable in static export/dev.
+      if (e instanceof Error && /заблокирован|вход|формат|размер/i.test(e.message)) throw e;
+    }
+  }
+  if (!supabaseConfigured) throw new Error('Supabase is not configured');
+  const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return uploadDirectToSupabase(file, `${safeFolder}/${currentUser?.uid ?? 'anon'}/${name}`, mimeType, onProgress);
 }
 
 const DB_NAME = 'karaokecraft_blobs';
@@ -62,19 +147,16 @@ export function isBlobRef(ref?: string): ref is string {
 
 /**
  * Uploads to Supabase and returns the public URL; throws instead of falling back to this browser
- * (for files that must be visible to everyone, like covers).
+ * (for files that must be visible to everyone, like covers and avatars).
  */
 export async function uploadPublicFile(file: Blob, folder: string): Promise<string> {
-  if (!supabaseConfigured) throw new Error('Supabase is not configured');
-  const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  return uploadToSupabase(file, `${folder}/${auth.currentUser?.uid ?? 'anon'}/${name}`);
+  return uploadCloudBlob(file, folder);
 }
 
 export async function putBlob(file: Blob, folder = 'uploads', onProgress?: UploadProgress): Promise<string> {
-  const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   if (supabaseConfigured) {
     try {
-      return await uploadToSupabase(file, `${folder}/${auth.currentUser?.uid ?? 'anon'}/${name}`, onProgress);
+      return await uploadCloudBlob(file, folder, onProgress);
     } catch (e) {
       console.warn('[storage] upload failed, keeping the file in this browser only:', e);
     }
@@ -92,7 +174,7 @@ export async function putBlob(file: Blob, folder = 'uploads', onProgress?: Uploa
 
 export async function resolveBlobUrl(ref?: string): Promise<string | null> {
   if (!ref) return null;
-  if (!isBlobRef(ref)) return ref; // plain URL / data URL
+  if (!isBlobRef(ref)) return safeMediaUrl(ref) ?? null;
   const cached = urlCache.get(ref);
   if (cached) return cached;
   try {
@@ -111,18 +193,12 @@ export async function resolveBlobUrl(ref?: string): Promise<string | null> {
   }
 }
 
-/**
- * Moves a file that only lives in this browser (`idb:` ref) to Supabase and returns the public
- * URL, or null when there is nothing to move (not a local ref, file not in this browser, or the
- * upload failed).
- */
 export async function uploadLocalBlob(ref: string | undefined, folder = 'uploads'): Promise<string | null> {
   if (!isBlobRef(ref) || !supabaseConfigured) return null;
   const blob = await getBlob(ref);
   if (!blob) return null;
-  const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   try {
-    return await uploadToSupabase(blob, `${folder}/${auth.currentUser?.uid ?? 'anon'}/${name}`);
+    return await uploadCloudBlob(blob, folder);
   } catch (e) {
     console.warn('[storage] could not move a local file to Supabase:', e);
     return null;

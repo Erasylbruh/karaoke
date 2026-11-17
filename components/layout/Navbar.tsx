@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { safeMediaUrl } from '@/lib/format';
 import { ShieldCheck, LogOut, User as UserIcon, LayoutDashboard, Plus } from 'lucide-react';
 import NotificationsBell from '@/components/layout/NotificationsBell';
 import { DownloadsButton } from '@/components/downloads/DownloadsPanel';
@@ -26,17 +27,15 @@ const menuItem: React.CSSProperties = {
 export default function Navbar() {
   const pathname = usePathname();
   const { user, isAdmin, logout } = useAuth();
-  const [showDropdown, setShowDropdown] = useState(false);
+  const [openOnPath, setOpenOnPath] = useState<string | null>(null);
+  const showDropdown = openOnPath === pathname;
+  const setShowDropdown = (open: boolean) => setOpenOnPath(open ? pathname : null);
   const menuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    setShowDropdown(false);
-  }, [pathname]);
 
   useEffect(() => {
     if (!showDropdown) return;
     const onDoc = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setShowDropdown(false);
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpenOnPath(null);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -73,9 +72,9 @@ export default function Navbar() {
             aria-haspopup="menu"
             aria-expanded={showDropdown}
           >
-            {user.avatar ? (
+            {safeMediaUrl(user.avatar) ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={user.avatar} alt="" className="av" style={{ width: 24, height: 24 }} />
+              <img src={safeMediaUrl(user.avatar)} alt="" className="av" style={{ width: 24, height: 24 }} />
             ) : (
               <UserIcon style={{ width: '16px', height: '16px' }} />
             )}

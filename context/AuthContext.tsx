@@ -13,11 +13,22 @@ import {
   EmailAuthProvider,
   type User as FirebaseUser,
 } from 'firebase/auth';
+import { deleteDoc, doc, getDoc, runTransaction, setDoc } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
-import { auth } from '../lib/firebase';
+import { auth, db } from '../lib/firebase';
 import { User } from '../lib/types';
-import { saveUser, getUserByUid, validateUsername, normalizeUsername, effectiveStatus, privateProfileLoaded } from '../lib/storage';
-import { setSyncScope } from '../lib/store';
+import {
+  saveUser,
+  saveUserAsync,
+  getUserByUid,
+  validateUsername,
+  normalizeUsername,
+  effectiveStatus,
+  privateProfileLoaded,
+  isUsernameTaken,
+  uid as shortId,
+} from '../lib/storage';
+import { cols, setSyncScope } from '../lib/store';
 import { useDataVersion } from '../components/DataProvider';
 
 export type AuthResult = { ok: true } | { ok: false; error: string };
@@ -63,7 +74,6 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const DEFAULT_AVATAR =
   'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80';
 
-/** false while hydrating (matches the server render), true afterwards. */
 const noopSubscribe = () => () => {};
 const useHydrated = () => useSyncExternalStore(noopSubscribe, () => true, () => false);
 
@@ -76,7 +86,6 @@ function banMessage(u: User): string | null {
   return null;
 }
 
-/** After the link in a letter, Firebase's page offers to go back to this address on the site. */
 function actionSettings(path: string) {
   return typeof window === 'undefined' ? undefined : { url: window.location.origin + path };
 }
@@ -89,13 +98,39 @@ function authError(e: unknown): string {
   if (code.includes('weak-password')) return 'Пароль слишком простой: минимум 6 символов';
   if (code.includes('invalid-email')) return 'Некорректный email';
   if (code.includes('operation-not-allowed') || code.includes('configuration-not-found'))
-    return 'В Firebase Console не включён вход по email/паролю (Authentication → Sign-in method)';
+    return 'Вход по email и паролю временно недоступен';
   if (code.includes('too-many-requests')) return 'Слишком много попыток, попробуйте позже';
   if (code.includes('requires-recent-login') || code.includes('user-token-expired'))
     return 'Сессия устарела: выйдите и войдите снова, затем повторите';
   if (code.includes('unauthorized-continue-uri') || code.includes('unauthorized-domain'))
-    return 'Домен сайта не добавлен в Firebase → Authentication → Settings → Authorized domains';
-  return e instanceof Error ? e.message : 'Не удалось выполнить вход';
+    return 'Не удалось отправить письмо подтверждения для этого домена';
+  return 'Не удалось выполнить запрос. Проверьте подключение и попробуйте снова';
+}
+
+/** Reserves `usernames/{tag}` transactionally when rules support it; ignores gracefully on older deployed rules. */
+async function claimUsernameTag(tag: string, ownerUid: string, previousTag?: string): Promise<boolean> {
+  try {
+    await runTransaction(db, async (tx) => {
+      const ref = doc(db, 'usernames', tag);
+      const existing = await tx.get(ref);
+      if (existing.exists() && existing.data()?.uid !== ownerUid) {
+        throw new Error('TAKEN');
+      }
+      tx.set(ref, { uid: ownerUid });
+      if (previousTag && previousTag !== tag) {
+        const oldRef = doc(db, 'usernames', previousTag);
+        const oldSnap = await tx.get(oldRef);
+        if (oldSnap.exists() && oldSnap.data()?.uid === ownerUid) {
+          tx.delete(oldRef);
+        }
+      }
+    });
+    return true;
+  } catch (e) {
+    if (e instanceof Error && e.message === 'TAKEN') return false;
+    // Older deployed rules without /usernames: allow and rely on profile check until rules are deployed.
+    return !isUsernameTaken(tag, ownerUid);
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -118,7 +153,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
-  // The profile is read from the live cache, so role/ban changes made by admins apply immediately.
   const user = useMemo(() => {
     if (!authUid) return null;
     const u = getUserByUid(authUid) ?? null;
@@ -126,19 +160,64 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUid, version]);
 
-  // Personal data (notifications, downloads, likes, stats, private profile) is loaded only for
-  // the signed-in person; admins also get every profile's private data.
   const isAdminRole = authUid ? getUserByUid(authUid)?.role === 'admin' : false;
   useEffect(() => {
     setSyncScope(authUid ? { uid: authUid, admin: isAdminRole } : null);
   }, [authUid, isAdminRole]);
 
   const finishSignIn = async (account: FirebaseUser): Promise<AuthResult> => {
-    const profile = getUserByUid(account.uid) ?? null;
+    let profile = getUserByUid(account.uid) ?? null;
+
     if (!profile) {
-      await signOut(auth);
-      return { ok: false, error: 'Профиль не найден. Зарегистрируйтесь заново' };
+      // Check Firestore directly in case the cache hasn't received the snapshot yet, or recover an orphaned Auth user.
+      try {
+        const snap = await getDoc(doc(db, 'users', account.uid));
+        if (snap.exists()) {
+          const data = { ...(snap.data() as User), id: snap.id };
+          cols.users.map.set(snap.id, data);
+          profile = data;
+        } else {
+          // Recover from an interrupted earlier registration so the email is never permanently bricked.
+          const basePrefix = (account.email?.split('@')[0] || 'user')
+            .toLowerCase()
+            .replace(/[^a-z0-9_]/g, '')
+            .slice(0, 12) || 'user';
+          let candidate = basePrefix.length >= 3 ? basePrefix : `user_${basePrefix}`;
+          if (isUsernameTaken(candidate)) candidate = `${candidate.slice(0, 13)}_${shortId().slice(0, 5)}`;
+          const recovered: User = {
+            id: account.uid,
+            uid: account.uid,
+            username: candidate,
+            name: (account.displayName || account.email?.split('@')[0] || 'Автор').slice(0, 80),
+            email: account.email ?? undefined,
+            avatar: DEFAULT_AVATAR,
+            bio: '',
+            role: 'user',
+            status: 'active',
+            createdAt: new Date().toISOString(),
+          };
+          await saveUserAsync(recovered);
+          void setDoc(doc(db, 'usernames', candidate), { uid: account.uid }).catch(() => undefined);
+          profile = recovered;
+        }
+      } catch {
+        await signOut(auth);
+        return { ok: false, error: 'Не удалось загрузить профиль. Проверьте интернет и попробуйте снова' };
+      }
     }
+
+    // Load `userPrivate` before building the ban message so `banReason` is included immediately.
+    if (effectiveStatus(profile) === 'banned_perm' || effectiveStatus(profile) === 'banned_temp') {
+      try {
+        const privSnap = await getDoc(doc(db, 'userPrivate', profile.id));
+        if (privSnap.exists()) {
+          profile = { ...profile, ...(privSnap.data() as Partial<User>) };
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     const ban = banMessage(profile);
     if (ban) {
       await signOut(auth);
@@ -150,7 +229,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (identifier: string, password: string): Promise<AuthResult> => {
     const id = identifier.trim();
     if (!id || !password) return { ok: false, error: 'Введите email и пароль' };
-    // Sign-in by tag would need everyone's email in public data, so it is email only.
     if (!id.includes('@') || id.startsWith('@')) return { ok: false, error: 'Войдите по email: вход по тегу больше не поддерживается' };
     try {
       const cred = await signInWithEmailAndPassword(auth, id, password);
@@ -164,14 +242,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const tag = normalizeUsername(data.username);
     const tagError = validateUsername(tag);
     if (tagError) return { ok: false, error: tagError };
+    const cleanName = data.name.trim().slice(0, 80);
+    if (!cleanName) return { ok: false, error: 'Введите отображаемое имя' };
+
     try {
       const cred = await createUserWithEmailAndPassword(auth, data.email.trim(), data.password);
-      saveUser({
+      const claimed = await claimUsernameTag(tag, cred.user.uid);
+      const finalTag = claimed ? tag : `${tag.slice(0, 13)}_${shortId().slice(0, 5)}`;
+      if (!claimed) {
+        void setDoc(doc(db, 'usernames', finalTag), { uid: cred.user.uid }).catch(() => undefined);
+      }
+      await saveUserAsync({
         id: cred.user.uid,
         uid: cred.user.uid,
-        username: tag,
-        name: data.name.trim(),
-        // As Firebase stored it: the rules compare it with the token's email.
+        username: finalTag,
+        name: cleanName,
         email: cred.user.email ?? data.email.trim(),
         avatar: DEFAULT_AVATAR,
         bio: '',
@@ -179,7 +264,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         status: 'active',
         createdAt: new Date().toISOString(),
       });
-      // The letter is a bonus: a failure here must not undo a successful registration.
       void sendEmailVerification(cred.user, actionSettings('/')).catch(() => undefined);
       return { ok: true };
     } catch (e) {
@@ -208,7 +292,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await account.reload();
     } catch (e) {
-      // After an email change Firebase ends the old session: sign in again with the new address.
       if (String((e as { code?: string })?.code).includes('user-token-expired')) await signOut(auth);
       return false;
     }
@@ -239,8 +322,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // The private copy of the email (userPrivate) follows the sign-in email, e.g. after a change.
-  // The rules compare it with the token, so the token is refreshed first.
   const storedEmail = user?.email;
   const privateReady = privateProfileLoaded();
   useEffect(() => {
@@ -252,7 +333,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then(() => alive && saveUser({ ...user, email: authEmail }))
       .catch(async (e) => {
         console.warn('[auth] could not refresh the session for the new email', e);
-        // Firebase ends the old session once the email changed: sign in again with the new one.
         const code = String((e as { code?: string })?.code);
         if (code.includes('user-token-expired') || code.includes('invalid-user-token') || code.includes('user-disabled')) {
           await signOut(auth);
@@ -272,7 +352,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await sendPasswordResetEmail(auth, e, actionSettings('/login'));
       return { ok: true };
     } catch (err) {
-      // Never tell whether an address is registered: that would let anyone check emails.
       const code = (err as { code?: string })?.code || '';
       if (code.includes('user-not-found')) return { ok: true };
       return { ok: false, error: authError(err) };
@@ -284,7 +363,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (data.username !== undefined) {
       const tagError = validateUsername(data.username, user.id);
       if (tagError) return { ok: false, error: tagError };
-      data = { ...data, username: normalizeUsername(data.username) };
+      const nextTag = normalizeUsername(data.username);
+      const prevTag = user.username;
+      data = { ...data, username: nextTag };
+      if (nextTag !== prevTag) {
+        void claimUsernameTag(nextTag, user.id, prevTag).then((ok) => {
+          if (!ok) void deleteDoc(doc(db, 'usernames', nextTag)).catch(() => undefined);
+        });
+      }
+    }
+    if (data.name !== undefined) {
+      const trimmed = data.name.trim().slice(0, 80);
+      if (!trimmed) return { ok: false, error: 'Имя не может быть пустым' };
+      data = { ...data, name: trimmed };
+    }
+    if (data.bio !== undefined) {
+      data = { ...data, bio: data.bio.slice(0, 1000) };
     }
     saveUser({ ...user, ...data });
     return { ok: true };
@@ -322,8 +416,6 @@ export function useAuth() {
   if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
-  // Checked in every consumer (not only in the provider): a Suspense boundary can hydrate after the
-  // provider has already loaded the saved user, and it must still match the signed-out server HTML.
   const hydrated = useHydrated();
   return useMemo(
     () => (hydrated ? context : { ...context, user: null, isAuthenticated: false, isAdmin: false, isLoading: true }),

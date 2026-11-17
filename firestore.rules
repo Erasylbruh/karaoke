@@ -1,9 +1,10 @@
 rules_version = '2';
 
-// Public: tracks, public profiles, reviews, playlists, follower lists.
-// Private: email and moderation details (userPrivate), notifications, download history, likes,
-// author stats. The app reads private collections only through queries limited to the signed-in
-// person (lib/store.ts setSyncScope), so every rule below can stay owner-only.
+// Public: active public tracks, public profiles, reviews, playlists, follower lists.
+// Unlisted tracks: readable by direct document ID (`get`), never returned in public `list` queries.
+// Private / blocked / deleted tracks: readable only by their author and admins.
+// Private personal data: email and moderation details (userPrivate), notifications, download
+// history, likes, author stats — owner-only (and admins where needed for moderation).
 service cloud.firestore {
   match /databases/{database}/documents {
     function userPath(id) {
@@ -25,6 +26,22 @@ service cloud.firestore {
     function ownsProfile(id) {
       return signedIn() && exists(userPath(id)) &&
         get(userPath(id)).data.get('uid', id) == request.auth.uid;
+    }
+
+    function isNotBanned(id) {
+      return exists(userPath(id)) && (
+        !(get(userPath(id)).data.get('status', 'active') in ['banned_perm', 'banned_temp']) ||
+        (get(userPath(id)).data.get('status', 'active') == 'banned_temp' &&
+          get(userPath(id)).data.get('banUntilMs', 9999999999999) <= request.time.toMillis())
+      );
+    }
+
+    function activeOwner(id) {
+      return ownsProfile(id) && isNotBanned(id);
+    }
+
+    function activeSignedIn() {
+      return signedIn() && (!exists(userPath(request.auth.uid)) || isNotBanned(request.auth.uid));
     }
 
     function isAdminProfile(id) {
@@ -51,6 +68,10 @@ service cloud.firestore {
       return changedKeys().hasAny([key]);
     }
 
+    function validUsername(tag) {
+      return tag is string && tag.matches('^[a-z0-9_]{3,20}$');
+    }
+
     // ---------------- Profiles ----------------
 
     match /users/{id} {
@@ -58,10 +79,16 @@ service cloud.firestore {
       allow create: if signedIn() && request.auth.uid == id &&
         request.resource.data.id == id && request.resource.data.uid == id &&
         request.resource.data.role == 'user' && request.resource.data.get('status', 'active') == 'active' &&
-        !request.resource.data.keys().hasAny(['email', 'warnings', 'banReason', 'banUntil']);
+        validUsername(request.resource.data.username) &&
+        request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 80 &&
+        !request.resource.data.keys().hasAny(['email', 'contactEmail', 'warnings', 'banReason', 'banUntil', 'banUntilMs']);
       allow update: if isAdmin() || (
-        ownsProfile(id) &&
+        activeOwner(id) &&
         changedKeys().hasOnly(['username', 'name', 'avatar', 'bio', 'contacts', 'seenTutorials', 'email']) &&
+        validUsername(request.resource.data.username) &&
+        request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 80 &&
+        (!changes('bio') || (request.resource.data.bio is string && request.resource.data.bio.size() <= 1000)) &&
+        (!changes('avatar') || (request.resource.data.avatar is string && request.resource.data.avatar.size() <= 150000)) &&
         // An old public email may stay as it is or be removed, never be set or changed.
         (!changes('email') || !request.resource.data.keys().hasAny(['email']))
       );
@@ -87,17 +114,30 @@ service cloud.firestore {
       }
     }
 
-    // Email and moderation details: the owner and admins only.
+    // Transactional reservation of unique @tags.
+    match /usernames/{tag} {
+      allow read: if true;
+      allow create: if signedIn() && validUsername(tag) &&
+        request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid == request.auth.uid;
+      allow delete: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+    }
+
+    // Email, hidden contact email and moderation details: the owner and admins only.
     match /userPrivate/{id} {
       allow read: if (signedIn() && request.auth.uid == id) || isAdmin();
       allow create: if isAdmin() || (
         signedIn() && request.auth.uid == id &&
-        request.resource.data.keys().hasOnly(['id', 'email']) &&
-        request.resource.data.email == request.auth.token.email
+        request.resource.data.keys().hasOnly(['id', 'email', 'contactEmail']) &&
+        request.resource.data.id == id &&
+        (!request.resource.data.keys().hasAny(['email']) || request.resource.data.email == request.auth.token.email) &&
+        (!request.resource.data.keys().hasAny(['contactEmail']) ||
+          (request.resource.data.contactEmail is string && request.resource.data.contactEmail.size() <= 200))
       );
       allow update: if isAdmin() || (
-        signedIn() && request.auth.uid == id && changedKeys().hasOnly(['email']) &&
-        request.resource.data.email == request.auth.token.email
+        signedIn() && request.auth.uid == id && changedKeys().hasOnly(['email', 'contactEmail']) &&
+        (!changes('email') || request.resource.data.email == request.auth.token.email) &&
+        (!changes('contactEmail') || !request.resource.data.keys().hasAny(['contactEmail']) ||
+          (request.resource.data.contactEmail is string && request.resource.data.contactEmail.size() <= 200))
       );
       allow delete: if isAdmin();
     }
@@ -110,20 +150,39 @@ service cloud.firestore {
     // ---------------- Tracks ----------------
 
     match /karaokes/{id} {
-      allow read: if true;
-      allow create: if ownsProfile(request.resource.data.authorId) &&
-        request.resource.data.id == id && request.resource.data.get('status', 'active') == 'active';
+      allow get: if isAdmin() ||
+        (resource.data.get('status', 'active') == 'active' &&
+          resource.data.get('visibility', 'public') in ['public', 'unlisted']) ||
+        ownsProfile(resource.data.authorId);
+      allow list: if isAdmin() ||
+        (resource.data.status == 'active' && resource.data.visibility == 'public') ||
+        (signedIn() && resource.data.authorId == request.auth.uid);
+      allow create: if activeOwner(request.resource.data.authorId) &&
+        request.resource.data.id == id &&
+        request.resource.data.get('status', 'active') == 'active' &&
+        request.resource.data.get('visibility', 'public') in ['public', 'unlisted', 'private'] &&
+        request.resource.data.get('viewsCount', 0) == 0 &&
+        request.resource.data.get('likesCount', 0) == 0 &&
+        request.resource.data.get('recommendationScore', 10) <= 20 &&
+        request.resource.data.get('isFeatured', false) == false &&
+        request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 200 &&
+        request.resource.data.get('artist', '') is string && request.resource.data.get('artist', '').size() <= 200 &&
+        request.resource.data.get('lyrics', []) is list && request.resource.data.get('lyrics', []).size() <= 1000;
       allow update: if isAdmin() || (
-        ownsProfile(resource.data.authorId) && request.resource.data.authorId == resource.data.authorId &&
+        activeOwner(resource.data.authorId) && request.resource.data.authorId == resource.data.authorId &&
         request.resource.data.get('id', id) == resource.data.get('id', id) &&
+        !changedKeys().hasAny(['viewsCount', 'likesCount', 'recommendationScore', 'isFeatured', 'createdAt']) &&
+        request.resource.data.get('visibility', 'public') in ['public', 'unlisted', 'private'] &&
         (request.resource.data.get('status', 'active') == resource.data.get('status', 'active') ||
           request.resource.data.status == 'deleted')
       );
-      // Listeners (guests too) move the counters, one step at a time.
-      allow update: if changedKeys().hasOnly(['viewsCount', 'likesCount', 'recommendationScore', 'isFeatured']) &&
+      // Listeners (guests too) move the counters on accessible active tracks, one step at a time.
+      allow update: if resource.data.get('status', 'active') == 'active' &&
+        resource.data.get('visibility', 'public') in ['public', 'unlisted'] &&
+        changedKeys().hasOnly(['viewsCount', 'likesCount', 'recommendationScore', 'isFeatured']) &&
         (!changes('viewsCount') ||
           request.resource.data.viewsCount == resource.data.get('viewsCount', 0) + 1) &&
-        (!changes('likesCount') || (signedIn() &&
+        (!changes('likesCount') || (activeSignedIn() &&
           request.resource.data.likesCount - resource.data.get('likesCount', 0) in [-1, 1] &&
           request.resource.data.likesCount >= 0)) &&
         (!changes('recommendationScore') || (
@@ -138,21 +197,25 @@ service cloud.firestore {
     // Once per (track, actor, action): created, never changed. Read one by one, never listed.
     match /interactions/{key} {
       allow get: if true;
-      allow create: if request.resource.data.keys().hasOnly(['at']) && request.resource.data.at is string;
+      allow create: if key.size() <= 200 &&
+        request.resource.data.keys().hasOnly(['at']) &&
+        request.resource.data.at is string && request.resource.data.at.size() <= 40;
     }
 
     // ---------------- Reviews ----------------
 
     match /comments/{id} {
       allow read: if true;
-      allow create: if signedIn() && request.resource.data.userId == request.auth.uid &&
+      allow create: if activeSignedIn() && request.resource.data.userId == request.auth.uid &&
         request.resource.data.id == id &&
         request.resource.data.keys().hasOnly(['id', 'karaokeId', 'userId', 'userName', 'userAvatar', 'content', 'createdAt', 'parentId']) &&
-        request.resource.data.content is string && request.resource.data.content.size() <= 1000 &&
+        request.resource.data.userName is string && request.resource.data.userName.size() <= 80 &&
+        request.resource.data.userAvatar is string && request.resource.data.userAvatar.size() <= 150000 &&
+        request.resource.data.content is string && request.resource.data.content.size() >= 1 && request.resource.data.content.size() <= 1000 &&
         exists(projectPath(request.resource.data.karaokeId));
       // Pinning: the track author or an admin.
       allow update: if changedKeys().hasOnly(['pinned']) && (
-        isAdmin() || (signedIn() && get(projectPath(resource.data.karaokeId)).data.authorId == request.auth.uid)
+        isAdmin() || (activeSignedIn() && get(projectPath(resource.data.karaokeId)).data.authorId == request.auth.uid)
       );
       // The review's author or an admin; deleting a review also removes the replies to it.
       allow delete: if isAdmin() || (signedIn() && (
@@ -166,18 +229,25 @@ service cloud.firestore {
 
     match /playlists/{id} {
       allow read: if true;
-      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid && request.resource.data.id == id;
-      allow update: if signedIn() && resource.data.ownerId == request.auth.uid &&
-        request.resource.data.ownerId == resource.data.ownerId;
+      allow create: if activeSignedIn() && request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.id == id &&
+        request.resource.data.keys().hasOnly(['id', 'ownerId', 'name', 'karaokeIds', 'createdAt']) &&
+        request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 100 &&
+        request.resource.data.karaokeIds is list && request.resource.data.karaokeIds.size() <= 500;
+      allow update: if activeSignedIn() && resource.data.ownerId == request.auth.uid &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        changedKeys().hasOnly(['name', 'karaokeIds']) &&
+        request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 100 &&
+        request.resource.data.karaokeIds is list && request.resource.data.karaokeIds.size() <= 500;
       allow delete: if signedIn() && resource.data.ownerId == request.auth.uid;
     }
 
     // follows/{authorId}.followers: each person can only add or remove themselves.
     match /follows/{targetId} {
       allow read: if true;
-      allow create: if signedIn() && request.resource.data.keys().hasOnly(['id', 'followers']) &&
+      allow create: if activeSignedIn() && request.resource.data.keys().hasOnly(['id', 'followers']) &&
         request.resource.data.followers.toSet().hasOnly([request.auth.uid]);
-      allow update: if signedIn() && request.resource.data.keys().hasOnly(['id', 'followers']) &&
+      allow update: if activeSignedIn() && request.resource.data.keys().hasOnly(['id', 'followers']) &&
         request.resource.data.followers.toSet().difference(resource.data.followers.toSet())
           .union(resource.data.followers.toSet().difference(request.resource.data.followers.toSet()))
           .hasOnly([request.auth.uid]);
@@ -196,7 +266,7 @@ service cloud.firestore {
         request.resource.data.keys().hasOnly(['id', 'userId', 'type', 'text', 'createdAt', 'read', 'actorId', 'actorName', 'karaokeId', 'karaokeTitle', 'commentId']) &&
         request.resource.data.text is string && request.resource.data.text.size() <= 500 && (
           (isModerationNotification(request.resource.data) && isAdmin()) ||
-          (!isModerationNotification(request.resource.data) && signedIn() &&
+          (!isModerationNotification(request.resource.data) && activeSignedIn() &&
             request.resource.data.actorId == request.auth.uid && request.resource.data.userId != request.auth.uid)
         );
       allow update: if signedIn() && resource.data.userId == request.auth.uid &&
@@ -223,7 +293,7 @@ service cloud.firestore {
 
     match /projectReports/{id} {
       allow read: if isAdmin();
-      allow create: if ownsProfile(request.resource.data.reporterId) &&
+      allow create: if activeOwner(request.resource.data.reporterId) &&
         request.resource.data.keys().hasOnly(['karaokeId', 'karaokeTitle', 'reporterId', 'type', 'details', 'status', 'createdAt']) &&
         request.resource.data.type in ['copyright', 'inappropriate', 'abuse', 'spam', 'other'] &&
         request.resource.data.details is string && request.resource.data.details.size() <= 1000 &&
@@ -243,12 +313,26 @@ service cloud.firestore {
     }
 
     // Public site settings. `genres` (the list projects pick from) is edited by admins only.
-    // `aligner` is not writable here: the auto-timing service would need to sign in first.
+    // `aligner` is the auto-timing service's tunnel address ("" = offline), written only by the
+    // service's own Firebase account: the one whose uid sits in services/aligner.
     match /config/{id} {
       allow read: if true;
       allow write: if id == 'genres' && isAdmin() &&
         request.resource.data.keys().hasOnly(['id', 'list']) && request.resource.data.id == 'genres' &&
         request.resource.data.list is list && request.resource.data.list.size() <= 200;
+      allow create, update: if id == 'aligner' && isAlignerService() &&
+        request.resource.data.keys().hasOnly(['url', 'updatedAt']) &&
+        request.resource.data.url is string &&
+        (request.resource.data.url == '' ||
+          request.resource.data.url.matches('https://[a-z0-9-]+[.]trycloudflare[.]com')) &&
+        request.resource.data.updatedAt is number;
+
+      function isAlignerService() {
+        let marker = /databases/$(database)/documents/services/aligner;
+        return signedIn() && exists(marker) && get(marker).data.uid == request.auth.uid;
+      }
     }
+
+    // services/aligner = { uid }: set by the owner in the Firebase console. No client access.
   }
 }

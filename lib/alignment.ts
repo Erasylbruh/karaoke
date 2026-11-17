@@ -9,7 +9,7 @@
  * otherwise http://localhost:8787 (the same computer).
  */
 import { doc, getDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 
 export interface AlignedLine {
   time: number;
@@ -146,11 +146,19 @@ export async function alignLyrics(audio: Blob, fileName: string, lines: string[]
   }
   form.append('lyrics', JSON.stringify(lines));
   form.append('language', guessLanguage(lines.join(' ')));
+  const headers: Record<string, string> = {};
+  if (auth.currentUser) {
+    try {
+      headers.Authorization = `Bearer ${await auth.currentUser.getIdToken()}`;
+    } catch {
+      /* offline local call */
+    }
+  }
   let res: Response;
   try {
-    res = await fetch(`${await getAlignerUrl()}/align`, { method: 'POST', body: form });
+    res = await fetch(`${await getAlignerUrl()}/align`, { method: 'POST', headers, body: form });
   } catch {
-    throw new Error('Сервис авто-тайминга не отвечает. Запустите aligner на компьютере.');
+    throw new Error('Сервис авто-тайминга временно недоступен. Расставьте тайминги вручную или загрузите файл .lrc.');
   }
   const data = await res.json().catch(() => null);
   if (!res.ok || !data) throw new Error(data?.error ? `Авто-тайминг: ${data.error}` : 'Авто-тайминг не удался');

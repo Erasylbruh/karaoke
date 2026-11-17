@@ -13,8 +13,8 @@ use symphonia::core::meta::MetadataOptions;
 
 pub const TARGET_RATE: u32 = 16_000;
 
-/// Decodes `bytes` and returns 16 kHz mono samples.
-pub fn decode_to_16k_mono(bytes: Vec<u8>, ext_hint: Option<&str>) -> Result<Vec<f32>> {
+/// Decodes `bytes` and returns 16 kHz mono samples, aborting early if `max_seconds` is exceeded.
+pub fn decode_to_16k_mono(bytes: Vec<u8>, ext_hint: Option<&str>, max_seconds: f32) -> Result<Vec<f32>> {
     let mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
     let mut hint = Hint::new();
     if let Some(ext) = ext_hint {
@@ -54,10 +54,17 @@ pub fn decode_to_16k_mono(bytes: Vec<u8>, ext_hint: Option<&str>) -> Result<Vec<
             Ok(audio) => {
                 let spec = audio.spec();
                 rate = spec.rate();
+                if rate == 0 || rate > 384_000 {
+                    return Err(anyhow!("unsupported audio sample rate: {rate}"));
+                }
+                let max_samples = ((max_seconds + 1.0).max(1.0) * rate as f32) as usize;
                 let ch = spec.channels().count().max(1);
                 buf.resize(audio.samples_interleaved(), 0.0);
                 audio.copy_to_slice_interleaved(&mut buf);
                 mono.extend(buf.chunks_exact(ch).map(|f| f.iter().sum::<f32>() / ch as f32));
+                if mono.len() > max_samples {
+                    return Err(anyhow!("audio is longer than {} minutes", (max_seconds / 60.0).round()));
+                }
             }
             Err(Error::DecodeError(_)) => continue, // skip a damaged frame
             Err(e) => return Err(e.into()),
