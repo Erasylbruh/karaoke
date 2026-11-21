@@ -2,12 +2,15 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { CornerDownRight, Pin, PinOff, Reply, Send, Trash2 } from 'lucide-react';
+import { CornerDownRight, Flag, Pin, PinOff, Reply, Send, Trash2 } from 'lucide-react';
 import { Comment } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
-import { getComments, addComment, deleteComment, togglePinComment, uid } from '@/lib/storage';
+import { getComments, addComment, deleteComment, togglePinComment, uid, getUserById } from '@/lib/storage';
 import { safeMediaUrl } from '@/lib/format';
+import { mailto } from '@/lib/legal';
+
+const VERIFY_HINT = 'Подтвердите email по ссылке из письма, чтобы оставлять отзывы';
 
 const MAX_LENGTH = 1000;
 
@@ -34,7 +37,7 @@ export default function CommentsSection({
   trackAuthorId?: string;
   highlightId?: string | null;
 }) {
-  const { user, isAdmin, openAuthPrompt } = useAuth();
+  const { user, isAdmin, openAuthPrompt, ensureVerified } = useAuth();
   useDataVersion(); // new reviews from other people appear immediately
   const [text, setText] = useState('');
   const [error, setError] = useState('');
@@ -56,13 +59,18 @@ export default function CommentsSection({
 
   const askLogin = () => openAuthPrompt('Чтобы оставлять отзывы и отвечать, войдите или зарегистрируйтесь.');
 
-  const post = (content: string, parentId?: string): boolean => {
+  const post = async (content: string, parentId?: string): Promise<boolean> => {
     if (!user) {
       askLogin();
       return false;
     }
     const value = content.trim();
     if (!value) return false;
+    // The rules accept reviews only from confirmed emails; without this check the review would vanish silently.
+    if (!(await ensureVerified())) {
+      setError(VERIFY_HINT);
+      return false;
+    }
     addComment({
       id: 'comm-' + uid(),
       karaokeId,
@@ -76,11 +84,11 @@ export default function CommentsSection({
     return true;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return askLogin();
     if (!text.trim()) return setError('Напишите текст отзыва');
-    if (post(text)) {
+    if (await post(text)) {
       setText('');
       setError('');
     }
@@ -92,9 +100,9 @@ export default function CommentsSection({
     setReplyText('');
   };
 
-  const sendReply = (e: React.FormEvent) => {
+  const sendReply = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (replyTo && post(replyText, replyTo.id)) {
+    if (replyTo && (await post(replyText, replyTo.id))) {
       setReplyTo(null);
       setReplyText('');
     }
@@ -102,10 +110,20 @@ export default function CommentsSection({
 
   const item = (c: Comment, isReply: boolean) => {
     const canDelete = isAdmin || user?.id === c.userId;
+    // Shown from the author's current profile: the copy stored in the review may be outdated.
+    const author = getUserById(c.userId);
+    const name = author?.name || c.userName;
+    const avatar = author ? author.avatar : c.userAvatar;
+    const complain = () => {
+      window.location.href = mailto(
+        'Жалоба на отзыв',
+        `Ссылка на отзыв: ${window.location.origin}/karaoke/${encodeURIComponent(karaokeId)}#c-${c.id}\nЧто не так: `
+      );
+    };
     return (
       <div id={`c-${c.id}`} className={`rv-item ${c.pinned ? 'pinned' : ''} ${highlightId === c.id ? 'hl' : ''}`}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={safeMediaUrl(c.userAvatar) || '/brand/karaokecraft-app-icon.svg'} alt="" className="av" />
+        <img src={safeMediaUrl(avatar) || '/brand/karaokecraft-app-icon.svg'} alt="" className="av" />
         <div className="rv-body">
           {c.pinned && (
             <span className="rv-pin-label">
@@ -113,7 +131,7 @@ export default function CommentsSection({
             </span>
           )}
           <div className="rv-meta">
-            <b>{c.userName}</b>
+            <b>{name}</b>
             {c.userId === trackAuthorId && <span className="rv-badge">автор</span>}
             <span>{formatDate(c.createdAt)}</span>
           </div>
@@ -133,6 +151,11 @@ export default function CommentsSection({
             {canDelete && (
               <button className="dg" onClick={() => deleteComment(c.id)} aria-label="Удалить">
                 <Trash2 size={14} aria-hidden="true" /> Удалить
+              </button>
+            )}
+            {user?.id !== c.userId && (
+              <button type="button" onClick={complain} aria-label={`Пожаловаться на отзыв ${name}`}>
+                <Flag size={14} aria-hidden="true" /> Пожаловаться
               </button>
             )}
           </div>
@@ -192,7 +215,7 @@ export default function CommentsSection({
                           rows={2}
                           maxLength={MAX_LENGTH}
                           autoFocus
-                          placeholder={`Ответ для ${c.userName}`}
+                          placeholder={`Ответ для ${getUserById(c.userId)?.name || c.userName}`}
                           value={replyText}
                           onChange={(e) => setReplyText(e.target.value)}
                         />

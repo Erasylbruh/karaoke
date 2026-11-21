@@ -11,6 +11,7 @@ import DataProvider from '@/components/DataProvider';
 import { DownloadsProvider } from '@/context/DownloadsContext';
 import DownloadsPanel from '@/components/downloads/DownloadsPanel';
 import VerifyEmailBanner from '@/components/layout/VerifyEmailBanner';
+import ConsentBanner from '@/components/layout/ConsentBanner';
 import { SITE_URL } from '@/lib/server-meta';
 
 export const metadata: Metadata = {
@@ -54,6 +55,7 @@ export default function RootLayout({
                 <SiteChrome><Navbar /></SiteChrome>
               </Suspense>
               <main>
+                <ConsentBanner />
                 <VerifyEmailBanner />
                 <Suspense fallback={<div style={{ minHeight: '60vh' }} />}>
                   {children}

@@ -459,7 +459,7 @@ export function normalizeUsername(input: string): string {
   return input.trim().replace(/^@/, '').toLowerCase();
 }
 
-const PRIVATE_KEYS = ['email', 'contactEmail', 'warnings', 'banReason'] as const;
+const PRIVATE_KEYS = ['email', 'contactEmail', 'warnings', 'banReason', 'termsVersion', 'consentAt'] as const;
 type PrivateUser = Pick<User, 'id' | (typeof PRIVATE_KEYS)[number]>;
 const UP = cols.userPrivate as Col<PrivateUser>;
 

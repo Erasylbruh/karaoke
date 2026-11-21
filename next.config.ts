@@ -2,6 +2,15 @@ import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV === "development";
 
+/** Origin of a fixed auto-timing server (NEXT_PUBLIC_ALIGNER_URL), for when the aligner moves off the tunnel. */
+const alignerOrigin = (() => {
+  try {
+    return process.env.NEXT_PUBLIC_ALIGNER_URL ? new URL(process.env.NEXT_PUBLIC_ALIGNER_URL).origin : "";
+  } catch {
+    return "";
+  }
+})();
+
 const cspDirectives = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
@@ -21,8 +30,8 @@ const cspDirectives = [
     "https://*.trycloudflare.com",
     "http://localhost:*",
     "http://127.0.0.1:*",
-    "http://[::1]:*",
-  ].join(" "),
+    alignerOrigin,
+  ].filter(Boolean).join(" "),
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

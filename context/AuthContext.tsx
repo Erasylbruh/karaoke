@@ -13,7 +13,7 @@ import {
   EmailAuthProvider,
   type User as FirebaseUser,
 } from 'firebase/auth';
-import { deleteDoc, doc, getDoc, runTransaction, setDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 import { auth, db } from '../lib/firebase';
 import { User } from '../lib/types';
@@ -29,6 +29,7 @@ import {
   uid as shortId,
 } from '../lib/storage';
 import { cols, setSyncScope } from '../lib/store';
+import { accountDeletionInProgress, deleteAccountCompletely, recordConsent, releaseUsername, reserveUsername } from '../lib/account';
 import { useDataVersion } from '../components/DataProvider';
 
 export type AuthResult = { ok: true } | { ok: false; error: string };
@@ -38,6 +39,8 @@ interface RegisterData {
   name: string;
   email: string;
   password: string;
+  /** The person ticked acceptance of the terms and consent to personal data processing. */
+  consent: boolean;
 }
 
 interface AuthContextType {
@@ -52,7 +55,19 @@ interface AuthContextType {
   login: (identifier: string, password: string) => Promise<AuthResult>;
   register: (data: RegisterData) => Promise<AuthResult>;
   logout: () => void;
+  /** Saves profile fields other than the tag (use changeUsername for that). */
   updateProfile: (data: Partial<User>) => AuthResult;
+  /** Reserves the new @tag, then moves the profile to it and frees the old one. */
+  changeUsername: (tag: string) => Promise<AuthResult>;
+  /**
+   * True once the email is confirmed and the session token says so (the rules read the token).
+   * Re-checks with Firebase when the cached state says it is not confirmed yet.
+   */
+  ensureVerified: () => Promise<boolean>;
+  /** Records acceptance of the current terms and privacy policy (lib/legal.ts LEGAL_VERSION). */
+  acceptTerms: () => Promise<boolean>;
+  /** Deletes the account and all its data after re-checking the password (lib/account.ts). */
+  deleteAccount: (password: string, onStep?: (label: string) => void) => Promise<AuthResult>;
   /** Email of the signed-in account and whether its owner confirmed it by the link in the letter. */
   authEmail: string | null;
   emailVerified: boolean;
@@ -71,8 +86,8 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const DEFAULT_AVATAR =
-  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80';
+/** Local picture, so new profiles don't load images from a third-party site. */
+const DEFAULT_AVATAR = '/brand/karaokecraft-app-icon.svg';
 
 const noopSubscribe = () => () => {};
 const useHydrated = () => useSyncExternalStore(noopSubscribe, () => true, () => false);
@@ -107,30 +122,13 @@ function authError(e: unknown): string {
   return 'Не удалось выполнить запрос. Проверьте подключение и попробуйте снова';
 }
 
-/** Reserves `usernames/{tag}` transactionally when rules support it; ignores gracefully on older deployed rules. */
-async function claimUsernameTag(tag: string, ownerUid: string, previousTag?: string): Promise<boolean> {
-  try {
-    await runTransaction(db, async (tx) => {
-      const ref = doc(db, 'usernames', tag);
-      const existing = await tx.get(ref);
-      if (existing.exists() && existing.data()?.uid !== ownerUid) {
-        throw new Error('TAKEN');
-      }
-      tx.set(ref, { uid: ownerUid });
-      if (previousTag && previousTag !== tag) {
-        const oldRef = doc(db, 'usernames', previousTag);
-        const oldSnap = await tx.get(oldRef);
-        if (oldSnap.exists() && oldSnap.data()?.uid === ownerUid) {
-          tx.delete(oldRef);
-        }
-      }
-    });
-    return true;
-  } catch (e) {
-    if (e instanceof Error && e.message === 'TAKEN') return false;
-    // Older deployed rules without /usernames: allow and rely on profile check until rules are deployed.
-    return !isUsernameTaken(tag, ownerUid);
-  }
+/** Reserves `tag`, or `tag_xxxxx` when it was taken meanwhile. Resolves to the reserved tag or null. */
+async function reserveTagOrVariant(tag: string, ownerUid: string): Promise<string | null> {
+  const first = await reserveUsername(tag, ownerUid);
+  if (first === 'ok') return tag;
+  if (first === 'error') return null;
+  const variant = `${tag.slice(0, 13)}_${shortId().slice(0, 5)}`;
+  return (await reserveUsername(variant, ownerUid)) === 'ok' ? variant : null;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -184,10 +182,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             .slice(0, 12) || 'user';
           let candidate = basePrefix.length >= 3 ? basePrefix : `user_${basePrefix}`;
           if (isUsernameTaken(candidate)) candidate = `${candidate.slice(0, 13)}_${shortId().slice(0, 5)}`;
+          // The tag is reserved before the profile is written: the rules require it.
+          const reserved = await reserveTagOrVariant(candidate, account.uid);
+          if (!reserved) throw new Error('tag reservation failed');
           const recovered: User = {
             id: account.uid,
             uid: account.uid,
-            username: candidate,
+            username: reserved,
             name: (account.displayName || account.email?.split('@')[0] || 'Автор').slice(0, 80),
             email: account.email ?? undefined,
             avatar: DEFAULT_AVATAR,
@@ -197,7 +198,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             createdAt: new Date().toISOString(),
           };
           await saveUserAsync(recovered);
-          void setDoc(doc(db, 'usernames', candidate), { uid: account.uid }).catch(() => undefined);
           profile = recovered;
         }
       } catch {
@@ -244,13 +244,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (tagError) return { ok: false, error: tagError };
     const cleanName = data.name.trim().slice(0, 80);
     if (!cleanName) return { ok: false, error: 'Введите отображаемое имя' };
+    if (!data.consent) return { ok: false, error: 'Нужно принять соглашение и дать согласие на обработку данных' };
 
     try {
       const cred = await createUserWithEmailAndPassword(auth, data.email.trim(), data.password);
-      const claimed = await claimUsernameTag(tag, cred.user.uid);
-      const finalTag = claimed ? tag : `${tag.slice(0, 13)}_${shortId().slice(0, 5)}`;
-      if (!claimed) {
-        void setDoc(doc(db, 'usernames', finalTag), { uid: cred.user.uid }).catch(() => undefined);
+      const finalTag = await reserveTagOrVariant(tag, cred.user.uid);
+      if (!finalTag) {
+        await signOut(auth);
+        return {
+          ok: false,
+          error: 'Аккаунт создан, но не удалось закрепить тег. Войдите с этим email и паролем — мы закончим настройку профиля',
+        };
       }
       await saveUserAsync({
         id: cred.user.uid,
@@ -264,6 +268,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         status: 'active',
         createdAt: new Date().toISOString(),
       });
+      // Written separately, so registration still works while older rules without these fields are deployed;
+      // if it fails, ConsentBanner asks again.
+      void recordConsent(cred.user.uid);
       void sendEmailVerification(cred.user, actionSettings('/')).catch(() => undefined);
       return { ok: true };
     } catch (e) {
@@ -291,6 +298,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!account) return false;
     try {
       await account.reload();
+      // reload() updates the account but not the session token, and the rules read the token.
+      if (account.emailVerified) await account.getIdToken(true);
     } catch (e) {
       if (String((e as { code?: string })?.code).includes('user-token-expired')) await signOut(auth);
       return false;
@@ -298,6 +307,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setEmailVerified(account.emailVerified);
     setAuthEmail(account.email);
     return account.emailVerified;
+  };
+
+  const ensureVerified = async (): Promise<boolean> => {
+    const account = auth.currentUser;
+    if (!account) return false;
+    if (!account.emailVerified) return refreshVerification();
+    try {
+      // Confirmed in another tab: the account knows, but this tab's token may not yet.
+      const token = await account.getIdTokenResult();
+      if (token.claims.email_verified !== true) await account.getIdToken(true);
+    } catch {
+      /* keep the cached state */
+    }
+    return true;
+  };
+
+  const acceptTerms = async (): Promise<boolean> => (authUid ? recordConsent(authUid) : false);
+
+  const deleteAccount = async (password: string, onStep?: (label: string) => void): Promise<AuthResult> => {
+    if (!user) return { ok: false, error: 'Нужно войти' };
+    if (!password) return { ok: false, error: 'Введите пароль' };
+    try {
+      await deleteAccountCompletely({ password, profileId: user.id, onStep });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : 'Не удалось удалить аккаунт' };
+    }
   };
 
   const changeEmail = async (newEmail: string, password: string): Promise<AuthResult> => {
@@ -325,7 +361,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const storedEmail = user?.email;
   const privateReady = privateProfileLoaded();
   useEffect(() => {
-    if (!user || !authEmail || !privateReady) return;
+    // During account deletion the private data disappears on purpose: don't write the email back.
+    if (!user || !authEmail || !privateReady || accountDeletionInProgress()) return;
     if (storedEmail && storedEmail.toLowerCase() === authEmail.toLowerCase()) return;
     let alive = true;
     void auth.currentUser
@@ -358,19 +395,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const changeUsername = async (input: string): Promise<AuthResult> => {
+    if (!user || !authUid) return { ok: false, error: 'Нужно войти' };
+    const next = normalizeUsername(input);
+    const tagError = validateUsername(next, user.id);
+    if (tagError) return { ok: false, error: tagError };
+    if (next === user.username) return { ok: true };
+    const claim = await reserveUsername(next, authUid);
+    if (claim === 'taken') return { ok: false, error: 'Этот тег уже занят' };
+    if (claim === 'error') return { ok: false, error: 'Не удалось закрепить тег. Проверьте подключение и попробуйте снова' };
+    try {
+      await updateDoc(doc(db, 'users', user.id), { username: next });
+    } catch {
+      void releaseUsername(next, authUid);
+      return { ok: false, error: 'Не удалось сменить тег. Попробуйте ещё раз' };
+    }
+    void releaseUsername(user.username, authUid);
+    return { ok: true };
+  };
+
   const updateProfile = (data: Partial<User>): AuthResult => {
     if (!user) return { ok: false, error: 'Нужно войти' };
     if (data.username !== undefined) {
-      const tagError = validateUsername(data.username, user.id);
-      if (tagError) return { ok: false, error: tagError };
-      const nextTag = normalizeUsername(data.username);
-      const prevTag = user.username;
-      data = { ...data, username: nextTag };
-      if (nextTag !== prevTag) {
-        void claimUsernameTag(nextTag, user.id, prevTag).then((ok) => {
-          if (!ok) void deleteDoc(doc(db, 'usernames', nextTag)).catch(() => undefined);
-        });
-      }
+      // The tag changes only through changeUsername, which reserves it first.
+      data = { ...data };
+      delete data.username;
     }
     if (data.name !== undefined) {
       const trimmed = data.name.trim().slice(0, 80);
@@ -398,6 +447,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         register,
         logout,
         updateProfile,
+        changeUsername,
+        ensureVerified,
+        acceptTerms,
+        deleteAccount,
         authEmail,
         emailVerified,
         sendVerification,

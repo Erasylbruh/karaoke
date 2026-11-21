@@ -72,6 +72,27 @@ service cloud.firestore {
       return tag is string && tag.matches('^[a-z0-9_]{3,20}$');
     }
 
+    // Confirmed email (the claim in the ID token): required to publish tracks and reviews.
+    function verifiedEmail() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
+    // A profile may carry a @tag only while usernames/{tag} is reserved by its owner.
+    function ownsTag(tag) {
+      let ref = /databases/$(database)/documents/usernames/$(tag);
+      return validUsername(tag) && exists(ref) && get(ref).data.uid == request.auth.uid;
+    }
+
+    // Notifications only admins create: moderation notices and answers to complaints.
+    function isAdminOnlyNotification(data) {
+      return data.get('type', '') in ['warning', 'ban', 'report'];
+    }
+
+    function validConsent(data) {
+      return (!data.keys().hasAny(['termsVersion']) || (data.termsVersion is string && data.termsVersion.size() <= 20)) &&
+        (!data.keys().hasAny(['consentAt']) || (data.consentAt is string && data.consentAt.size() <= 40));
+    }
+
     // ---------------- Profiles ----------------
 
     match /users/{id} {
@@ -79,20 +100,22 @@ service cloud.firestore {
       allow create: if signedIn() && request.auth.uid == id &&
         request.resource.data.id == id && request.resource.data.uid == id &&
         request.resource.data.role == 'user' && request.resource.data.get('status', 'active') == 'active' &&
-        validUsername(request.resource.data.username) &&
+        ownsTag(request.resource.data.username) &&
         request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 80 &&
-        !request.resource.data.keys().hasAny(['email', 'contactEmail', 'warnings', 'banReason', 'banUntil', 'banUntilMs']);
+        !request.resource.data.keys().hasAny(['email', 'contactEmail', 'warnings', 'banReason', 'banUntil', 'banUntilMs', 'termsVersion', 'consentAt']);
       allow update: if isAdmin() || (
         activeOwner(id) &&
         changedKeys().hasOnly(['username', 'name', 'avatar', 'bio', 'contacts', 'seenTutorials', 'email']) &&
         validUsername(request.resource.data.username) &&
+        (!changes('username') || ownsTag(request.resource.data.username)) &&
         request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 80 &&
         (!changes('bio') || (request.resource.data.bio is string && request.resource.data.bio.size() <= 1000)) &&
         (!changes('avatar') || (request.resource.data.avatar is string && request.resource.data.avatar.size() <= 150000)) &&
         // An old public email may stay as it is or be removed, never be set or changed.
         (!changes('email') || !request.resource.data.keys().hasAny(['email']))
       );
-      allow delete: if isAdmin();
+      // The owner deletes the profile when deleting the account (lib/account.ts).
+      allow delete: if isAdmin() || ownsProfile(id);
 
       match /projectWarnings/{warningId} {
         allow read: if ownsProfile(id) || isAdmin();
@@ -114,32 +137,35 @@ service cloud.firestore {
       }
     }
 
-    // Transactional reservation of unique @tags.
+    // Transactional reservation of unique @tags. Admins may reserve tags of older profiles (backfill).
     match /usernames/{tag} {
       allow read: if true;
       allow create: if signedIn() && validUsername(tag) &&
-        request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid == request.auth.uid;
+        request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid is string &&
+        (request.resource.data.uid == request.auth.uid || isAdmin());
       allow delete: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
     }
 
-    // Email, hidden contact email and moderation details: the owner and admins only.
+    // Email, hidden contact email, accepted terms version and moderation details: the owner and admins only.
     match /userPrivate/{id} {
       allow read: if (signedIn() && request.auth.uid == id) || isAdmin();
       allow create: if isAdmin() || (
         signedIn() && request.auth.uid == id &&
-        request.resource.data.keys().hasOnly(['id', 'email', 'contactEmail']) &&
+        request.resource.data.keys().hasOnly(['id', 'email', 'contactEmail', 'termsVersion', 'consentAt']) &&
         request.resource.data.id == id &&
         (!request.resource.data.keys().hasAny(['email']) || request.resource.data.email == request.auth.token.email) &&
         (!request.resource.data.keys().hasAny(['contactEmail']) ||
-          (request.resource.data.contactEmail is string && request.resource.data.contactEmail.size() <= 200))
+          (request.resource.data.contactEmail is string && request.resource.data.contactEmail.size() <= 200)) &&
+        validConsent(request.resource.data)
       );
       allow update: if isAdmin() || (
-        signedIn() && request.auth.uid == id && changedKeys().hasOnly(['email', 'contactEmail']) &&
+        signedIn() && request.auth.uid == id && changedKeys().hasOnly(['email', 'contactEmail', 'termsVersion', 'consentAt']) &&
         (!changes('email') || request.resource.data.email == request.auth.token.email) &&
         (!changes('contactEmail') || !request.resource.data.keys().hasAny(['contactEmail']) ||
-          (request.resource.data.contactEmail is string && request.resource.data.contactEmail.size() <= 200))
+          (request.resource.data.contactEmail is string && request.resource.data.contactEmail.size() <= 200)) &&
+        validConsent(request.resource.data)
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (signedIn() && request.auth.uid == id);
     }
 
     match /legacyAdminProfiles/{uid} {
@@ -157,7 +183,7 @@ service cloud.firestore {
       allow list: if isAdmin() ||
         (resource.data.status == 'active' && resource.data.visibility == 'public') ||
         (signedIn() && resource.data.authorId == request.auth.uid);
-      allow create: if activeOwner(request.resource.data.authorId) &&
+      allow create: if activeOwner(request.resource.data.authorId) && verifiedEmail() &&
         request.resource.data.id == id &&
         request.resource.data.get('status', 'active') == 'active' &&
         request.resource.data.get('visibility', 'public') in ['public', 'unlisted', 'private'] &&
@@ -191,7 +217,8 @@ service cloud.firestore {
           request.resource.data.recommendationScore <= 100)) &&
         (!changes('isFeatured') || (request.resource.data.isFeatured == true &&
           request.resource.data.get('recommendationScore', 0) >= 60));
-      allow delete: if isAdmin();
+      // Authors delete their tracks for good only when deleting the account (lib/account.ts).
+      allow delete: if isAdmin() || ownsProfile(resource.data.authorId);
     }
 
     // Once per (track, actor, action): created, never changed. Read one by one, never listed.
@@ -206,11 +233,14 @@ service cloud.firestore {
 
     match /comments/{id} {
       allow read: if true;
-      allow create: if activeSignedIn() && request.resource.data.userId == request.auth.uid &&
+      // Name and avatar are copies of the author's profile, so nobody can post under another name.
+      allow create: if activeSignedIn() && verifiedEmail() && request.resource.data.userId == request.auth.uid &&
         request.resource.data.id == id &&
         request.resource.data.keys().hasOnly(['id', 'karaokeId', 'userId', 'userName', 'userAvatar', 'content', 'createdAt', 'parentId']) &&
         request.resource.data.userName is string && request.resource.data.userName.size() <= 80 &&
         request.resource.data.userAvatar is string && request.resource.data.userAvatar.size() <= 150000 &&
+        request.resource.data.userName == get(userPath(request.auth.uid)).data.name &&
+        request.resource.data.userAvatar == get(userPath(request.auth.uid)).data.get('avatar', '') &&
         request.resource.data.content is string && request.resource.data.content.size() >= 1 && request.resource.data.content.size() <= 1000 &&
         exists(projectPath(request.resource.data.karaokeId));
       // Pinning: the track author or an admin.
@@ -251,6 +281,8 @@ service cloud.firestore {
         request.resource.data.followers.toSet().difference(resource.data.followers.toSet())
           .union(resource.data.followers.toSet().difference(request.resource.data.followers.toSet()))
           .hasOnly([request.auth.uid]);
+      // Only the author's own list, when deleting the account.
+      allow delete: if signedIn() && targetId == request.auth.uid;
     }
 
     // likes/{uid}.ids: the person's own liked tracks.
@@ -265,13 +297,22 @@ service cloud.firestore {
       allow create: if request.resource.data.id == id && request.resource.data.read == false &&
         request.resource.data.keys().hasOnly(['id', 'userId', 'type', 'text', 'createdAt', 'read', 'actorId', 'actorName', 'karaokeId', 'karaokeTitle', 'commentId']) &&
         request.resource.data.text is string && request.resource.data.text.size() <= 500 && (
-          (isModerationNotification(request.resource.data) && isAdmin()) ||
-          (!isModerationNotification(request.resource.data) && activeSignedIn() &&
-            request.resource.data.actorId == request.auth.uid && request.resource.data.userId != request.auth.uid)
+          (isAdminOnlyNotification(request.resource.data) && isAdmin()) ||
+          (!isAdminOnlyNotification(request.resource.data) && activeSignedIn() &&
+            request.resource.data.type in ['like', 'comment', 'reply', 'playlist', 'follow', 'download'] &&
+            request.resource.data.actorId == request.auth.uid && request.resource.data.userId != request.auth.uid &&
+            // The site shows these from the type and the real names; stored copies must match too.
+            (!request.resource.data.keys().hasAny(['actorName']) ||
+              request.resource.data.actorName == get(userPath(request.auth.uid)).data.name) &&
+            (!request.resource.data.keys().hasAny(['karaokeTitle']) ||
+              (request.resource.data.keys().hasAny(['karaokeId']) &&
+                request.resource.data.karaokeTitle == get(projectPath(request.resource.data.karaokeId)).data.title)))
         );
       allow update: if signedIn() && resource.data.userId == request.auth.uid &&
         changedKeys().hasOnly(['read']) && request.resource.data.read == true;
-      allow delete: if signedIn() && resource.data.userId == request.auth.uid && !isModerationNotification(resource.data);
+      // Moderation notices stay until the profile itself is deleted (account deletion).
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid &&
+        (!isModerationNotification(resource.data) || !exists(userPath(request.auth.uid)));
     }
 
     match /downloads/{id} {
@@ -287,6 +328,7 @@ service cloud.firestore {
         id == request.resource.data.authorId + '_' + request.resource.data.type + '_' + request.resource.data.day &&
         request.resource.data.type in ['listen', 'follow', 'download'] && request.resource.data.count == 1;
       allow update: if changedKeys().hasOnly(['count']) && request.resource.data.count == resource.data.count + 1;
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
     }
 
     // ---------------- Moderation ----------------

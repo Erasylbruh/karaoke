@@ -7,6 +7,7 @@ import { useDataVersion } from '@/components/DataProvider';
 import ProjectWarningDialog from '@/components/admin/ProjectWarningDialog';
 import { Karaoke } from '@/lib/types';
 import { getKaraokes, blockKaraoke, restoreKaraoke, softDeleteKaraoke, deleteKaraoke, getAuthor, RECOMMEND_THRESHOLD, hasInlineCover, moveCoverToStorage } from '@/lib/storage';
+import { deleteTrackFiles } from '@/lib/track-files';
 import Tabs from '@/components/ui/Tabs';
 import ActionMenu from '@/components/ui/ActionMenu';
 
@@ -38,6 +39,41 @@ export default function AdminTracks() {
 
   const count = (s: Tab) => items.filter((k) => k.status === s).length;
   const inline = items.filter(hasInlineCover);
+
+  /**
+   * Removes the track for good together with its audio, cover and font in storage. Used for
+   * confirmed copyright complaints: a blocked track's files would otherwise stay downloadable by URL.
+   */
+  /** Copyright takedown that keeps the record: the track is blocked and its files leave storage. */
+  const blockAndRemoveFiles = async (k: Karaoke) => {
+    if (!window.confirm(`Заблокировать «${k.title}» и удалить его аудио, обложку и шрифт из хранилища? Файлы восстановить будет нельзя.`)) return;
+    setNotice('');
+    blockKaraoke(k.id);
+    try {
+      const files = await deleteTrackFiles(k);
+      setNotice(`«${k.title}» заблокирован, файлов удалено: ${files}.`);
+    } catch (e) {
+      setNotice(
+        `«${k.title}» заблокирован, но файлы удалить не удалось (${e instanceof Error ? e.message : e}). ` +
+          'Проверьте SUPABASE_SERVICE_ROLE_KEY в Vercel или удалите файлы в Supabase → Storage вручную.'
+      );
+    }
+  };
+
+  const purge = async (k: Karaoke) => {
+    if (!window.confirm(`Удалить «${k.title}» навсегда вместе с аудио, обложкой и шрифтом? Это нельзя отменить.`)) return;
+    setNotice('');
+    try {
+      const files = await deleteTrackFiles(k);
+      deleteKaraoke(k.id);
+      setNotice(`«${k.title}» удалён навсегда. Файлов удалено: ${files}.`);
+    } catch (e) {
+      setNotice(
+        `Файлы «${k.title}» не удалось удалить (${e instanceof Error ? e.message : e}), поэтому трек не тронут. ` +
+          'Проверьте SUPABASE_SERVICE_ROLE_KEY в Vercel или удалите файлы в Supabase → Storage вручную.'
+      );
+    }
+  };
 
   /** One-off move of covers stored inside track documents to Supabase Storage. */
   const moveCovers = async () => {
@@ -140,13 +176,12 @@ export default function AdminTracks() {
                           items={tab === 'active'
                             ? [
                                 { label: 'Заблокировать', danger: true, onSelect: () => blockKaraoke(k.id) },
+                                { label: 'Заблокировать и удалить файлы', danger: true, onSelect: () => void blockAndRemoveFiles(k) },
                                 { label: 'Удалить', onSelect: () => { if (window.confirm(`Удалить «${k.title}»?`)) softDeleteKaraoke(k.id); } },
                               ]
                             : [
                                 { label: 'Восстановить', onSelect: () => restoreKaraoke(k.id) },
-                                ...(tab === 'deleted'
-                                  ? [{ label: 'Удалить навсегда', danger: true, onSelect: () => { if (window.confirm(`Удалить «${k.title}» навсегда?`)) deleteKaraoke(k.id); } }]
-                                  : []),
+                                { label: 'Удалить навсегда с файлами', danger: true, onSelect: () => void purge(k) },
                               ]}
                         />
                       </div>
