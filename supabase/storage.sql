@@ -1,6 +1,6 @@
--- Run in Supabase → SQL Editor.
--- Creates a public bucket "uploads" for karaoke audio, custom fonts and track covers.
--- Note: 'application/octet-stream' is intentionally excluded so arbitrary binaries cannot be uploaded.
+-- Run in Supabase → SQL Editor. Safe to run again.
+-- Public bucket "uploads" for karaoke audio, custom fonts, covers and avatars.
+-- 'application/octet-stream' is intentionally excluded so arbitrary binaries cannot be uploaded.
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (
@@ -19,20 +19,14 @@ on conflict (id) do update
       file_size_limit = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
 
--- RECOMMENDED FOR PRODUCTION:
--- Set SUPABASE_SERVICE_ROLE_KEY in Vercel Environment Variables so the site uploads through
--- /api/storage/upload (which verifies the user's Firebase ID token and ban status).
--- Once SUPABASE_SERVICE_ROLE_KEY is configured, drop the direct anonymous upload policy:
+-- Uploads go through /api/storage/upload: the route checks the Firebase ID token, a confirmed email
+-- and bans, then hands out a one-time signed upload URL. That needs SUPABASE_SERVICE_ROLE_KEY in
+-- Vercel (Project → Settings → Environment Variables). Deletions go through /api/storage/delete.
+--
+-- Once the key is set, the new code is deployed and an upload has been checked on the live site,
+-- close direct anonymous uploads (run this line on its own):
+--
 --   drop policy if exists "uploads: anyone can upload" on storage.objects;
-
--- Fallback policy ONLY for local dev without SUPABASE_SERVICE_ROLE_KEY (restricts path structure):
-drop policy if exists "uploads: anyone can upload" on storage.objects;
-create policy "uploads: anyone can upload"
-  on storage.objects for insert to anon, authenticated
-  with check (
-    bucket_id = 'uploads'
-    and (storage.foldername(name))[1] in ('audio', 'covers', 'fonts', 'uploads')
-  );
-
--- Public bucket: files are readable by URL without a policy. No update/delete policies for anon,
--- so uploaded files cannot be overwritten or removed with the publishable key.
+--
+-- Public bucket: files are readable by URL without a policy. There are no update/delete policies,
+-- so files cannot be overwritten or removed with the publishable key.

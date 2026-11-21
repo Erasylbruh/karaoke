@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { normalizeUsername, validateUsername } from '@/lib/storage';
+import { OPERATOR_NAME } from '@/lib/legal';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -14,8 +15,11 @@ export default function RegisterPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [acceptData, setAcceptData] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const consent = acceptTerms && acceptData;
 
   const tagError = useMemo(() => (username ? validateUsername(username) : null), [username]);
   const tagOk = !!username && !tagError;
@@ -31,8 +35,12 @@ export default function RegisterPage() {
       setError('Пароль должен быть не короче 6 символов');
       return;
     }
+    if (!consent) {
+      setError('Отметьте оба пункта ниже: без них регистрация невозможна');
+      return;
+    }
     setBusy(true);
-    const res = await register({ username, name, email, password });
+    const res = await register({ username, name, email, password, consent });
     setBusy(false);
     if (res.ok) router.push('/');
     else setError(res.error);
@@ -80,17 +88,29 @@ export default function RegisterPage() {
           />
         </label>
 
+        <label className="row sm" style={{ alignItems: 'flex-start', flexWrap: 'nowrap', gap: 10, lineHeight: 1.45 }}>
+          <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} style={{ marginTop: 3, flex: 'none' }} />
+          <span style={{ flex: 1 }}>
+            Принимаю{' '}
+            <Link href="/terms" target="_blank" style={{ color: 'var(--ac)' }}>Пользовательское соглашение</Link>. Мне исполнилось
+            18 лет, или у меня есть согласие родителей (законных представителей).
+          </span>
+        </label>
+
+        <label className="row sm" style={{ alignItems: 'flex-start', flexWrap: 'nowrap', gap: 10, lineHeight: 1.45 }}>
+          <input type="checkbox" checked={acceptData} onChange={(e) => setAcceptData(e.target.checked)} style={{ marginTop: 3, flex: 'none' }} />
+          <span style={{ flex: 1 }}>
+            Даю согласие оператору {OPERATOR_NAME} на сбор и обработку моих персональных данных, их передачу сервисам-обработчикам,
+            в том числе на серверы за пределами Республики Казахстан, и на показ данных профиля в открытом доступе — на условиях{' '}
+            <Link href="/privacy" target="_blank" style={{ color: 'var(--ac)' }}>Политики конфиденциальности</Link>.
+          </span>
+        </label>
+
         {error && <div className="fld"><span className="err">{error}</span></div>}
 
-        <button type="submit" className="bt pr" disabled={busy || !!tagError}>
+        <button type="submit" className="bt pr" disabled={busy || !!tagError || !consent}>
           {busy ? 'Создаём аккаунт…' : 'Зарегистрироваться'}
         </button>
-
-        <p className="mu sm" style={{ margin: 0, fontSize: 12, lineHeight: 1.45 }}>
-          Регистрируясь, вы принимаете{' '}
-          <Link href="/terms" style={{ color: 'var(--ac)' }}>Пользовательское соглашение</Link> и{' '}
-          <Link href="/privacy" style={{ color: 'var(--ac)' }}>Политику конфиденциальности</Link>.
-        </p>
       </form>
 
       <p className="mu sm" style={{ textAlign: 'center', marginTop: 18 }}>

@@ -8,6 +8,7 @@ import { useDataVersion } from '@/components/DataProvider';
 import { getKaraokeById, getNotifications, markNotificationsRead, getUserById } from '@/lib/storage';
 import { markProjectWarningsRead, subscribeProjectWarningNotifications } from '@/lib/project-moderation';
 import { AppNotification } from '@/lib/types';
+import { notificationText } from '@/lib/notification-text';
 
 const ICON: Record<AppNotification['type'], string> = {
   like: '♥',
@@ -18,6 +19,7 @@ const ICON: Record<AppNotification['type'], string> = {
   download: '↓',
   warning: '!',
   ban: '⛔',
+  report: '✉',
 };
 
 function ago(iso: string) {
@@ -109,7 +111,7 @@ function AccountNotifications({ userId }: { userId: string }) {
                   <>
                     <span className={`nb-ic ${n.type === 'warning' || n.type === 'ban' ? 'dg' : ''}`}>{ICON[n.type]}</span>
                     <span className="nb-tx wrap-anywhere">
-                      {n.text}
+                      {notificationText(n)}
                       <small>{ago(n.createdAt)}</small>
                     </span>
                     {!n.read && <i className="nb-new" aria-label="новое" />}

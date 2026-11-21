@@ -8,6 +8,7 @@ import { safeMediaUrl } from '@/lib/format';
 import { User } from '@/lib/types';
 import Tabs from '@/components/ui/Tabs';
 import ChangeEmailForm from '@/components/profile/ChangeEmailForm';
+import DeleteAccountForm from '@/components/profile/DeleteAccountForm';
 
 type Tab = 'profile' | 'contacts' | 'account';
 
@@ -48,8 +49,9 @@ export default function StudioSettings() {
 }
 
 function StudioSettingsForm({ user }: { user: User }) {
-  const { updateProfile } = useAuth();
+  const { updateProfile, changeUsername } = useAuth();
   const [tab, setTab] = useState<Tab>('profile');
+  const [savingTag, setSavingTag] = useState(false);
   const [name, setName] = useState(user.name);
   const [bio, setBio] = useState(user.bio || '');
   const [avatar, setAvatar] = useState(user.avatar);
@@ -149,10 +151,13 @@ function StudioSettingsForm({ user }: { user: User }) {
         <div className="stack" style={{ maxWidth: 520 }}>
           <form
             className="stack card"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
               if (tagError) return flash(false, tagError);
-              save({ username: tag }, 'Тег изменён');
+              setSavingTag(true);
+              const res = await changeUsername(tag);
+              setSavingTag(false);
+              flash(res.ok, res.ok ? 'Тег изменён' : res.error);
             }}
           >
             <label className="fld">
@@ -160,7 +165,9 @@ function StudioSettingsForm({ user }: { user: User }) {
               <input type="text" value={tag} onChange={(e) => setTag(e.target.value)} />
               {tagError && <span className="err">{tagError}</span>}
             </label>
-            <button className="bt pr" type="submit" disabled={!!tagError || tag === user.username}>Сменить тег</button>
+            <button className="bt pr" type="submit" disabled={savingTag || !!tagError || tag === user.username}>
+              {savingTag ? 'Сохраняем…' : 'Сменить тег'}
+            </button>
           </form>
           <ChangeEmailForm />
           <div className="card">
@@ -175,6 +182,7 @@ function StudioSettingsForm({ user }: { user: User }) {
               Показать подсказки заново
             </button>
           </div>
+          <DeleteAccountForm />
         </div>
       )}
 

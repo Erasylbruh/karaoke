@@ -10,6 +10,7 @@ import { pluralRu, safeMediaUrl } from '@/lib/format';
 import Tabs from '@/components/ui/Tabs';
 import ActionMenu, { ActionItem } from '@/components/ui/ActionMenu';
 import ModerationModal, { ModerationKind } from '@/components/admin/ModerationModal';
+import { backfillUsernameReservations } from '@/lib/account';
 
 type Tab = 'all' | 'warned' | 'banned_temp' | 'banned_perm';
 
@@ -27,6 +28,25 @@ export default function AdminUsers() {
   const [query, setQuery] = useState('');
   const [modal, setModal] = useState<{ kind: ModerationKind; user: User } | null>(null);
   const [moved, setMoved] = useState<number | null>(null);
+  const [tagsNote, setTagsNote] = useState('');
+  const [tagsBusy, setTagsBusy] = useState(false);
+
+  /** One-off after publishing the rules: reserves the @tags of profiles registered before reservations existed. */
+  const reserveTags = async () => {
+    setTagsBusy(true);
+    setTagsNote('');
+    try {
+      const { created, conflicts } = await backfillUsernameReservations(getUsers());
+      setTagsNote(
+        `Зарезервировано тегов: ${created}.` +
+          (conflicts.length ? ` Заняты другим аккаунтом (проверьте вручную): ${conflicts.map((t) => '@' + t).join(', ')}.` : '')
+      );
+    } catch {
+      setTagsNote('Не удалось зарезервировать теги. Проверьте, что новые firestore.rules опубликованы.');
+    } finally {
+      setTagsBusy(false);
+    }
+  };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const users = useMemo(() => getUsers(), [version]);
@@ -68,6 +88,17 @@ export default function AdminUsers() {
         </div>
       )}
       {moved !== null && <p className="mb-4 text-sm" role="status">Перенесено профилей: {moved}.</p>}
+
+      <div className="card row" style={{ marginBottom: 16, justifyContent: 'space-between', padding: 14 }}>
+        <span className="sm">
+          Теги профилей, созданных до резервирования, нужно закрепить за владельцами, иначе их сможет занять другой человек.
+          Безопасно запускать повторно.
+        </span>
+        <button type="button" className="bt sm" disabled={tagsBusy} onClick={() => void reserveTags()}>
+          {tagsBusy ? 'Резервируем…' : 'Зарезервировать теги'}
+        </button>
+      </div>
+      {tagsNote && <p className="mb-4 text-sm" role="status">{tagsNote}</p>}
 
       <Tabs<Tab>
         value={tab}

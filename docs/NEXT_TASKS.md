@@ -13,8 +13,12 @@
 
 Окно обрезки с превью, размер 768×768, загрузка файлом в Supabase и сообщение для HEIC сделаны (`lib/cover.ts`, `components/karaoke/CoverCropModal.tsx`).
 
-3. **Разрешить картинки в бакете и перенести старые обложки.** Выполнить в Supabase → SQL Editor команду `update storage.buckets …` из конца `supabase/storage.sql`, затем в админке «Треки» нажать «Перенести обложки». До этого новые обложки, как раньше, сохраняются внутри трека.
+3. **Разрешить картинки в бакете и перенести старые обложки.** Выполнить в Supabase → SQL Editor `supabase/storage.sql` (он разрешает `image/jpeg`, `image/png`, `image/webp`), затем в админке «Треки» нажать «Перенести обложки». До этого новые обложки, как раньше, сохраняются внутри трека.
 
-## Прочее
+## Перед ростом аудитории
 
-4. **Прослушивание в фоновой вкладке.** Часы плеера идут через `requestAnimationFrame`, поэтому в свёрнутой вкладке прослушивание не засчитывается.
+4. **App Check для Firestore** — защита от скриптов, накручивающих счётчики и расходующих квоту. Сначала перевести вызовы REST без токена App Check: `lib/server-meta.ts`, проверку бана в `lib/server/storage.ts`, запись адреса в `aligner/src/tunnel.rs`.
+5. **Чтение по страницам** вместо подписки каждого посетителя на все коллекции (`lib/store.ts`): иначе бесплатные 50 000 чтений в день кончатся при сотнях посетителей.
+6. **Счётчики на сервере** (Cloud Functions, нужен Blaze): `viewsCount`, `likesCount`, `recommendationScore`, `events`.
+7. **Сервис авто-тайминга на сервере** вместо Cloudflare Quick Tunnel с домашнего ПК (Cloudflare пишет, что Quick Tunnels только для тестов). Адрес сервера — в `NEXT_PUBLIC_ALIGNER_URL`, CSP подхватит его сам; правило `config/aligner` тогда можно не трогать.
+8. **CI на GitHub**: `npm ci`, `npm run lint`, `npx tsc --noEmit`, `npm run test:storage`, `npm run build` на каждый push и PR.
