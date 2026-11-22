@@ -133,6 +133,9 @@ export interface User {
   banReason?: string;
   /** Pages whose walkthrough this person has already seen (synced across devices). */
   seenTutorials?: string[];
+  /** Private (userPrivate/{id}): version of the terms and privacy policy accepted (lib/legal.ts) and when. */
+  termsVersion?: string;
+  consentAt?: string;
   createdAt: string;
 }
 
@@ -146,7 +149,8 @@ export interface Playlist {
 
 export type InteractionType = 'listen' | 'finish' | 'like' | 'playlist' | 'comment' | 'share';
 
-export type NotificationType = 'like' | 'comment' | 'reply' | 'playlist' | 'follow' | 'download' | 'warning' | 'ban';
+/** `report`: an admin's answer to a complaint the person filed. */
+export type NotificationType = 'like' | 'comment' | 'reply' | 'playlist' | 'follow' | 'download' | 'warning' | 'ban' | 'report';
 
 export interface AppNotification {
   id: string;

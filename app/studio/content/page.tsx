@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
 import { getKaraokesByAuthor, setKaraokeVisibility, softDeleteKaraoke } from '@/lib/storage';
-import { Visibility } from '@/lib/types';
+import { deleteTrackFiles } from '@/lib/track-files';
+import { Karaoke, Visibility } from '@/lib/types';
 import Tabs from '@/components/ui/Tabs';
 
 type Tab = 'all' | Visibility;
@@ -23,6 +24,18 @@ export default function StudioContent() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('all');
   const [copied, setCopied] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
+
+  /** Deleting a track also removes its audio, cover and font from storage, so they are not left downloadable by URL. */
+  const removeTrack = (k: Karaoke) => {
+    if (!window.confirm(`Удалить «${k.title}»? Аудио, обложка и шрифт трека будут удалены из хранилища без возможности восстановления.`)) return;
+    softDeleteKaraoke(k.id);
+    setNotice('');
+    deleteTrackFiles(k).catch((e) => {
+      console.warn('[studio] could not delete track files', e);
+      setNotice('Трек удалён, но его файлы не удалось убрать из хранилища. Попробуйте позже или напишите в поддержку.');
+    });
+  };
 
   const items = useMemo(
     () => (user ? getKaraokesByAuthor(user.id).filter((k) => k.status !== 'deleted') : []),
@@ -60,6 +73,8 @@ export default function StudioContent() {
           { id: 'private', label: 'Только я', count: count('private') },
         ]}
       />
+
+      {notice && <p className="err" role="alert" style={{ marginBottom: 12 }}>{notice}</p>}
 
       {shown.length === 0 ? (
         <div className="card em2">Здесь пока ничего нет.</div>
@@ -100,14 +115,7 @@ export default function StudioContent() {
                           {copied === k.id ? 'Скопировано' : 'Копировать ссылку'}
                         </button>
                       )}
-                      <button
-                        className="bt sm dg"
-                        onClick={() => {
-                          if (window.confirm(`Удалить «${k.title}»?`)) {
-                            softDeleteKaraoke(k.id);
-                          }
-                        }}
-                      >
+                      <button className="bt sm dg" onClick={() => removeTrack(k)}>
                         Удалить
                       </button>
                     </div>

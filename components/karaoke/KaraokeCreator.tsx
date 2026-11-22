@@ -72,7 +72,7 @@ function parseLrc(text: string): Line[] {
 /** `editId` switches the wizard to editing an existing karaoke of the signed-in author. */
 export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const router = useRouter();
-  const { user, isLoading, openAuthPrompt } = useAuth();
+  const { user, isLoading, openAuthPrompt, ensureVerified } = useAuth();
 
   const [step, setStep] = useState(0);
 
@@ -213,6 +213,9 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       showToast('Файл слишком большой — максимум 250 МБ');
       return;
     }
+    // Uploads are accepted only from signed-in accounts with a confirmed email (/api/storage/upload).
+    if (!user) return openAuthPrompt('Чтобы загрузить песню, войдите или зарегистрируйтесь.');
+    if (!(await ensureVerified())) return showToast('Подтвердите email по ссылке из письма, чтобы загружать песни');
     setBusy(true);
     setUploadShare(0);
     try {
@@ -477,8 +480,10 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const toggleGenre = (g: string) =>
     setGenres((cur) => (cur.includes(g) ? cur.filter((x) => x !== g) : cur.length >= MAX_GENRES ? cur : [...cur, g]));
 
-  const handlePublish = () => {
+  const handlePublish = async () => {
     if (!user) return openAuthPrompt('Чтобы опубликовать караоке, войдите или зарегистрируйтесь.');
+    // New tracks need a confirmed email (firestore.rules); otherwise the save would fail silently.
+    if (!editId && !(await ensureVerified())) return showToast('Подтвердите email по ссылке из письма, чтобы публиковать караоке');
     if (!step1Ok) return setStep(0);
     if (finalLines.length === 0) {
       showToast('Добавьте текст песни');

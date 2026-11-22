@@ -1,5 +1,6 @@
 import React from 'react';
 import Link from 'next/link';
+import { CONTACT_EMAIL, OPERATOR_NAME } from '@/lib/legal';
 
 export default function Footer() {
   return (
@@ -35,12 +36,13 @@ export default function Footer() {
               <li><Link href="/terms">Пользовательское соглашение</Link></li>
               <li><Link href="/privacy">Политика конфиденциальности</Link></li>
               <li><Link href="/copyright">Правообладателям</Link></li>
+              <li><a href={`mailto:${CONTACT_EMAIL}`}>Связаться: {CONTACT_EMAIL}</a></li>
             </ul>
           </div>
         </div>
 
         <div className="site-ft-bottom">
-          <span>© 2026 KaraokeCraft</span>
+          <span>© 2026 KaraokeCraft · {OPERATOR_NAME}</span>
           <span>Сделано для авторов, музыкантов и любителей караоке</span>
         </div>
       </div>
