@@ -5,8 +5,10 @@ import Link from 'next/link';
 import { Users, Music, ShieldCheck, BarChart3, Flag, Tags } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
+import { useDataVersion } from '@/components/DataProvider';
 import SideNav from '@/components/layout/SideNav';
 import { db } from '@/lib/firebase';
+import { allUsersLoaded } from '@/lib/store';
 
 const ICON = { width: 16, height: 16 };
 
@@ -28,6 +30,9 @@ function LegacyAdminAccess({ uid, profileId, children }: { uid: string; profileI
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { user, isAdmin, isLoading } = useAuth();
+  useDataVersion();
+  // Admins get every profile (lib/store setSyncScope); the pages count and check them, so they wait for the whole list.
+  const usersReady = allUsersLoaded();
 
   if (isLoading) {
     return (
@@ -61,7 +66,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         ]}
       />
       <div className="main">
-        {user?.uid && user.uid !== user.id ? (
+        {!usersReady ? (
+          <p className="mu" role="status">Загружаем профили…</p>
+        ) : user?.uid && user.uid !== user.id ? (
           <LegacyAdminAccess key={user.uid} uid={user.uid} profileId={user.id}>{children}</LegacyAdminAccess>
         ) : children}
       </div>

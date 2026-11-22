@@ -5,21 +5,24 @@
  * complaints) show their stored text.
  */
 import type { AppNotification } from './types';
-import { getComments, getKaraokeById, getUserById } from './storage';
+import { getKaraokeById, getUserById } from './storage';
+import { commentText } from './store';
 
 const ADMIN_TYPES: AppNotification['type'][] = ['warning', 'ban', 'report'];
 
 export const isAdminNotification = (n: AppNotification) => ADMIN_TYPES.includes(n.type);
 
+/** The reply's own text (cached review, or read once by id: NotificationsBell calls loadCommentText). */
 function quoteOf(n: AppNotification): string {
-  if (!n.commentId || !n.karaokeId) return '';
-  const c = getComments(n.karaokeId).find((x) => x.id === n.commentId);
-  if (!c) return '';
-  return c.content.length > 80 ? `${c.content.slice(0, 80)}…` : c.content;
+  if (!n.commentId) return '';
+  const text = commentText(n.commentId);
+  if (!text) return '';
+  return text.length > 80 ? `${text.slice(0, 80)}…` : text;
 }
 
 export function notificationText(n: AppNotification): string {
   if (isAdminNotification(n)) return n.text;
+  // actorName is checked against the sender's real name when the notification is written (rules).
   const actor = (n.actorId && getUserById(n.actorId)?.name) || n.actorName || 'Кто-то';
   const track = (n.karaokeId && getKaraokeById(n.karaokeId)?.title) || n.karaokeTitle || 'ваш трек';
   switch (n.type) {

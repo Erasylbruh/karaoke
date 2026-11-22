@@ -24,7 +24,7 @@ import fixWebmDuration from 'fix-webm-duration';
 import { Karaoke } from '@/lib/types';
 import { fontCss } from '@/lib/fonts';
 import { resolveBlobUrl } from '@/lib/blob-store';
-import { getAuthor } from '@/lib/storage';
+import { getAuthorAsync } from '@/lib/storage';
 import { synthPlayer } from '@/lib/audio-synthesizer';
 import { lineFillShare, vocalCueDots } from '@/lib/karaoke-fill';
 
@@ -156,7 +156,8 @@ export async function prepareFrameAssets(karaoke: Karaoke): Promise<FrameAssets>
       cover = null;
     }
   }
-  const author = getAuthor(karaoke);
+  // Read once if no page watches the profile any more (a queued video can start after leaving the track).
+  const author = await getAuthorAsync(karaoke);
   return { cover, author: author.name, authorTag: author.username ? '@' + author.username : author.name };
 }
 

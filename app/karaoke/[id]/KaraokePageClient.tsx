@@ -35,7 +35,7 @@ import type { ExportFormat, VideoClipRange, VideoQuality } from '@/lib/video-ren
 import CommentsSection from '@/components/karaoke/CommentsSection';
 import PlaylistPicker from '@/components/karaoke/PlaylistPicker';
 import ProjectReportDialog from '@/components/karaoke/ProjectReportDialog';
-import { useDataVersion } from '@/components/DataProvider';
+import { useDataVersion, useWatch } from '@/components/DataProvider';
 import { canReportProject } from '@/lib/project-moderation';
 
 const fmt = (n: number) =>
@@ -218,12 +218,19 @@ function KaraokePlayerContent() {
   const [reportTarget, setReportTarget] = useState<{ projectId: string; reporterId: string } | null>(null);
   const { startDownload } = useDownloads();
   const [showPlaylists, setShowPlaylists] = useState(false);
-  const [following, setFollowing] = useState(false);
+  // Reviewers' current names and avatars are read only once someone opens the reviews.
+  const [reviewsOpened, setReviewsOpened] = useState(false);
   const [isSmall, setIsSmall] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled;
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const version = useDataVersion(); // playlist state, author tracks and review count stay live
+  // Read for this page only: the reviews (count and list), the author's profile (tag link) and followers.
+  useWatch([
+    karaoke && `comments:${karaoke.id}`,
+    karaoke && `user:${karaoke.authorId}`,
+    karaoke && `follows:${karaoke.authorId}`,
+  ]);
 
   const actionsRef = useRef<HTMLDialogElement>(null);
   const reviewsRef = useRef<HTMLDialogElement>(null);
@@ -269,7 +276,6 @@ function KaraokePlayerContent() {
       setDuration(item.duration || 40);
       setLikesCount(item.likesCount);
       setIsLiked(hasUserLiked(item.id, user?.id));
-      setFollowing(isFollowing(user?.id, item.authorId));
       ensureStyleFont(item.style);
       const resolved = await resolveBlobUrl(item.audioUrl);
       if (alive) setAudioSrc(resolved);
@@ -422,6 +428,7 @@ function KaraokePlayerContent() {
       const m = window.location.hash.match(/^#c-(.+)$/);
       if (!m) return;
       setHighlightId(safeDecode(m[1]));
+      setReviewsOpened(true);
       reviewsRef.current?.showModal();
     };
     queueMicrotask(openFromHash);
@@ -573,8 +580,7 @@ function KaraokePlayerContent() {
 
   const handleFollow = () => {
     if (!karaoke || !requireAccount('Подписываться на авторов можно после входа.')) return;
-    const res = toggleFollow(user!.id, karaoke.authorId);
-    setFollowing(res.following);
+    toggleFollow(user!.id, karaoke.authorId);
   };
 
   if (!karaoke) {
@@ -609,6 +615,7 @@ function KaraokePlayerContent() {
   });
   const cue = isPlaying ? vocalCueDots(karaoke.lyrics, activeIdx, currentTime) : null;
 
+  const following = isFollowing(user?.id, karaoke.authorId);
   const inPlaylist = !!user && getPlaylists(user.id).some((p) => p.karaokeIds.includes(karaoke.id));
   const reviewCount = getComments(karaoke.id).length;
 
@@ -677,7 +684,14 @@ function KaraokePlayerContent() {
           <span className="t">Поделиться</span>
         </button>
 
-        <button className="bt" aria-haspopup="dialog" onClick={() => reviewsRef.current?.showModal()}>
+        <button
+          className="bt"
+          aria-haspopup="dialog"
+          onClick={() => {
+            setReviewsOpened(true);
+            reviewsRef.current?.showModal();
+          }}
+        >
           <MessageSquare size={16} aria-hidden="true" />
           <span className="t">Отзывы{reviewCount ? ` · ${reviewCount}` : ''}</span>
         </button>
@@ -877,7 +891,7 @@ function KaraokePlayerContent() {
               <X aria-hidden="true" size={22} />
             </button>
           </div>
-          <CommentsSection karaokeId={karaoke.id} trackAuthorId={karaoke.authorId} highlightId={highlightId} />
+          <CommentsSection karaokeId={karaoke.id} trackAuthorId={karaoke.authorId} highlightId={highlightId} live={reviewsOpened} />
         </dialog>
         {user && reportTarget?.projectId === karaoke.id && reportTarget.reporterId === user.id && (
           <ProjectReportDialog key={karaoke.id} project={karaoke} reporterId={user.id}

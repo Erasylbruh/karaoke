@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { CornerDownRight, Flag, Pin, PinOff, Reply, Send, Trash2 } from 'lucide-react';
 import { Comment } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
-import { useDataVersion } from '@/components/DataProvider';
-import { getComments, addComment, deleteComment, togglePinComment, uid, getUserById } from '@/lib/storage';
+import { useDataVersion, useWatch } from '@/components/DataProvider';
+import { getComments, commentsLoaded, addComment, deleteComment, togglePinComment, uid, getUserById } from '@/lib/storage';
 import { safeMediaUrl } from '@/lib/format';
 import { mailto } from '@/lib/legal';
 
@@ -27,15 +27,19 @@ const byDate = (a: Comment, b: Comment) => +new Date(a.createdAt) - +new Date(b.
 /**
  * Reviews with one level of replies. The track author (or an admin) can pin one review.
  * `highlightId` scrolls to and highlights a review, e.g. when opened from a reply notification.
+ * The page watches the reviews (comments:{karaokeId}); `live` (the reviews are open) also loads
+ * each reviewer's current name and avatar, otherwise the copy stored in the review is shown.
  */
 export default function CommentsSection({
   karaokeId,
   trackAuthorId,
   highlightId,
+  live = false,
 }: {
   karaokeId: string;
   trackAuthorId?: string;
   highlightId?: string | null;
+  live?: boolean;
 }) {
   const { user, isAdmin, openAuthPrompt, ensureVerified } = useAuth();
   useDataVersion(); // new reviews from other people appear immediately
@@ -45,6 +49,8 @@ export default function CommentsSection({
   const [replyText, setReplyText] = useState('');
 
   const all = getComments(karaokeId);
+  const loaded = commentsLoaded(karaokeId);
+  useWatch(live ? all.map((c) => `user:${c.userId}`) : []);
   const top = all
     .filter((c) => !c.parentId)
     .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || +new Date(b.createdAt) - +new Date(a.createdAt));
@@ -193,7 +199,7 @@ export default function CommentsSection({
       </form>
 
       {top.length === 0 ? (
-        <p className="rv-empty">Отзывов пока нет. Будьте первым.</p>
+        <p className="rv-empty">{loaded ? 'Отзывов пока нет. Будьте первым.' : 'Загружаем отзывы…'}</p>
       ) : (
         <ul className="rv-list">
           {top.map((c) => {

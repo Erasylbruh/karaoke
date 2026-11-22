@@ -25,10 +25,12 @@ import {
   normalizeUsername,
   effectiveStatus,
   privateProfileLoaded,
-  isUsernameTaken,
+  isUsernameFree,
+  getKaraokesByAuthor,
+  updateKaraoke,
   uid as shortId,
 } from '../lib/storage';
-import { cols, setSyncScope } from '../lib/store';
+import { cols, ownProfileSettled, setSyncScope } from '../lib/store';
 import { accountDeletionInProgress, deleteAccountCompletely, recordConsent, releaseUsername, reserveUsername } from '../lib/account';
 import { useDataVersion } from '../components/DataProvider';
 
@@ -180,9 +182,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             .toLowerCase()
             .replace(/[^a-z0-9_]/g, '')
             .slice(0, 12) || 'user';
-          let candidate = basePrefix.length >= 3 ? basePrefix : `user_${basePrefix}`;
-          if (isUsernameTaken(candidate)) candidate = `${candidate.slice(0, 13)}_${shortId().slice(0, 5)}`;
-          // The tag is reserved before the profile is written: the rules require it.
+          const candidate = basePrefix.length >= 3 ? basePrefix : `user_${basePrefix}`;
+          // The tag is reserved before the profile is written (the rules require it); a taken one gets a variant.
           const reserved = await reserveTagOrVariant(candidate, account.uid);
           if (!reserved) throw new Error('tag reservation failed');
           const recovered: User = {
@@ -245,6 +246,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const cleanName = data.name.trim().slice(0, 80);
     if (!cleanName) return { ok: false, error: 'Введите отображаемое имя' };
     if (!data.consent) return { ok: false, error: 'Нужно принять соглашение и дать согласие на обработку данных' };
+    // Checked against the reservation before the account exists; if someone takes the tag in the
+    // next moment, reserveTagOrVariant below still gives a variant rather than failing.
+    if (!(await isUsernameFree(tag))) return { ok: false, error: 'Этот тег уже занят' };
 
     try {
       const cred = await createUserWithEmailAndPassword(auth, data.email.trim(), data.password);
@@ -398,7 +402,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const changeUsername = async (input: string): Promise<AuthResult> => {
     if (!user || !authUid) return { ok: false, error: 'Нужно войти' };
     const next = normalizeUsername(input);
-    const tagError = validateUsername(next, user.id);
+    const tagError = validateUsername(next);
     if (tagError) return { ok: false, error: tagError };
     if (next === user.username) return { ok: true };
     const claim = await reserveUsername(next, authUid);
@@ -429,7 +433,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (data.bio !== undefined) {
       data = { ...data, bio: data.bio.slice(0, 1000) };
     }
-    saveUser({ ...user, ...data });
+    const next = { ...user, ...data };
+    saveUser(next);
+    // Catalog tiles and other lists show the author copy stored in each track (profiles are read
+    // only on demand), so a new name or avatar goes into the person's own tracks too.
+    if (next.name !== user.name || next.avatar !== user.avatar) {
+      getKaraokesByAuthor(user.id)
+        .filter((k) => k.authorName !== next.name || k.authorAvatar !== next.avatar)
+        .forEach((k) => updateKaraoke(k.id, { authorName: next.name, authorAvatar: next.avatar }));
+    }
     return { ok: true };
   };
 
@@ -439,7 +451,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         isAuthenticated: !!user,
         isAdmin: user?.role === 'admin',
-        isLoading: !authReady,
+        isLoading: !authReady || (!!authUid && !ownProfileSettled(authUid)),
         openAuthPrompt: (reason) => setAuthPrompt({ open: true, reason }),
         authPrompt,
         closeAuthPrompt: () => setAuthPrompt({ open: false }),

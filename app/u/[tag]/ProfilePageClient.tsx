@@ -18,10 +18,14 @@ import {
   getKaraokeById,
   canViewKaraoke,
   getAuthor,
+  normalizeUsername,
+  tagOwner,
+  userLoaded,
+  USERNAME_RE,
 } from '@/lib/storage';
 import { safeDecode, safeMediaUrl, pluralRu } from '@/lib/format';
 import { useAuth } from '@/context/AuthContext';
-import { useDataVersion } from '@/components/DataProvider';
+import { useDataVersion, useWatch } from '@/components/DataProvider';
 import KaraokeTile from '@/components/karaoke/KaraokeTile';
 import Tabs from '@/components/ui/Tabs';
 
@@ -37,6 +41,18 @@ export default function PublicProfilePage() {
   const [openList, setOpenList] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
 
+  // /u/{tag} → usernames/{tag} → the owner's profile, followers and playlists, read for this page only.
+  const tagKey = normalizeUsername(tag);
+  const validTag = USERNAME_RE.test(tagKey);
+  const owner = validTag ? tagOwner(tagKey) : '';
+  useWatch([
+    validTag && `tag:${tagKey}`,
+    owner && `user:${owner}`,
+    owner && `follows:${owner}`,
+    owner && `playlists:${owner}`,
+  ]);
+  const loading = owner === undefined || (!!owner && !userLoaded(owner));
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const profile = useMemo(() => getUserByUsername(tag) ?? null, [tag, version]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -47,6 +63,14 @@ export default function PublicProfilePage() {
   const followers = useMemo(() => (profile ? getFollowersCount(profile.id) : 0), [profile, version]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const following = useMemo(() => (profile ? isFollowing(me?.id, profile.id) : false), [me?.id, profile, version]);
+
+  if (!profile && loading) {
+    return (
+      <div className="pg">
+        <p className="mu">Загружаем профиль…</p>
+      </div>
+    );
+  }
 
   if (!profile) {
     return (

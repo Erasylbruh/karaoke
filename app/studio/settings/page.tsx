@@ -72,7 +72,7 @@ function StudioSettingsForm({ user }: { user: User }) {
     flash(res.ok, res.ok ? okText : res.error);
   };
 
-  const tagError = tag !== user.username ? validateUsername(tag, user.id) : null;
+  const tagError = tag !== user.username ? validateUsername(tag) : null;
 
   return (
     <>

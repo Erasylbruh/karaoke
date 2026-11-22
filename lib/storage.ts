@@ -1,7 +1,8 @@
 /**
  * Data layer. Shared data lives in Firestore and is read through the synchronous cache in
- * lib/store.ts; only per-browser things (guest plays, guests' seen tutorials) stay in localStorage.
- * See docs/FIREBASE.md for the collection layout.
+ * lib/store.ts; only the guest id stays in localStorage. Profiles, reviews, playlists and follower
+ * lists are in the cache only while a page watches them (useWatch), so their getters return what
+ * that page asked for, never "everyone". See docs/FIREBASE.md for the collection layout.
  */
 import {
   Karaoke,
@@ -17,7 +18,9 @@ import {
   StatType,
   DownloadRecord,
 } from './types';
-import { cols, Col, createOnce, fetchSingleKaraoke, emitStore } from './store';
+import { arrayRemove, arrayUnion, doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from './firebase';
+import { cols, Col, createOnce, fetchSingleKaraoke, emitStore, isWatchLoaded } from './store';
 import { uploadPublicFile } from './blob-store';
 
 const LOCAL_KEYS = {
@@ -159,10 +162,32 @@ export function getKaraokesByTag(tag: string): Karaoke[] {
   return getPublicKaraokes().filter((k) => k.tags.some((x) => x.toLowerCase() === t));
 }
 
+/**
+ * The author as shown next to a track: their profile when a page watches it (useWatch user:{id}),
+ * otherwise the name and avatar stored in the track (kept current by AuthContext.updateProfile).
+ */
 export function getAuthor(k: Karaoke): { id: string; name: string; username?: string; avatar?: string } {
   const u = getUserById(k.authorId);
   if (u) return { id: u.id, name: u.name, username: u.username, avatar: u.avatar };
   return { id: k.authorId, name: k.authorName, avatar: k.authorAvatar };
+}
+
+/** One profile read once, without keeping a listener (e.g. a video rendered after leaving the page). */
+export async function fetchUser(id: string): Promise<User | undefined> {
+  const cached = getUserById(id);
+  if (cached || !id || id.includes('/')) return cached;
+  try {
+    const snap = await getDoc(doc(db, 'users', id));
+    return snap.exists() ? ({ ...(snap.data() as User), id: snap.id }) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function getAuthorAsync(k: Karaoke) {
+  const u = await fetchUser(k.authorId);
+  if (u) return { id: u.id, name: u.name, username: u.username, avatar: u.avatar };
+  return getAuthor(k);
 }
 
 export function initialRecommendationScore(authorId: string): number {
@@ -402,11 +427,14 @@ export function hasUserLiked(karaokeId: string, userId?: string): boolean {
 
 // ---------------- COMMENTS ----------------
 
+/** Reviews of one track, once a page watches comments:{karaokeId} (see commentsLoaded). */
 export function getComments(karaokeId: string): Comment[] {
   return CM.all()
     .filter((c) => c.karaokeId === karaokeId)
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
 }
+
+export const commentsLoaded = (karaokeId: string) => isWatchLoaded(`comments:${karaokeId}`);
 
 export function addComment(comment: Comment): Comment {
   void CM.set(comment).catch(() => undefined);
@@ -499,21 +527,44 @@ export function getUserByUid(authUid: string): User | undefined {
   return withPrivate(U.get(authUid) ?? U.all().find((u) => u.uid === authUid));
 }
 
+/** The profile behind /u/{tag}: resolved through usernames/{tag} (watch tag:{tag}, then user:{uid}). */
 export function getUserByUsername(tag: string): User | undefined {
   const t = normalizeUsername(tag);
-  return U.all().find((u) => u.username.toLowerCase() === t);
+  const owner = cols.usernames.get(t)?.uid;
+  const u = owner ? getUserById(owner) : undefined;
+  if (u && u.username.toLowerCase() === t) return u;
+  // A tag without a reservation (older profiles): only found when the profile is cached anyway.
+  return U.all().find((x) => x.username.toLowerCase() === t);
 }
 
-export function isUsernameTaken(tag: string, exceptUserId?: string): boolean {
+/** True once `user:{id}` answered, so a missing profile really is missing. */
+export const userLoaded = (id: string) => isWatchLoaded(`user:${id}`);
+
+/** Owner uid of a tag, '' when the tag is free, undefined while `tag:{tag}` is still loading. */
+export function tagOwner(tag: string): string | undefined {
   const t = normalizeUsername(tag);
-  return U.all().some((u) => u.username.toLowerCase() === t && u.id !== exceptUserId);
+  const owner = cols.usernames.get(t)?.uid;
+  if (owner) return owner;
+  return isWatchLoaded(`tag:${t}`) ? '' : undefined;
 }
 
-export function validateUsername(tag: string, exceptUserId?: string): string | null {
+/** Format check only; whether the tag is free is decided by its reservation (isUsernameFree, reserveUsername). */
+export function validateUsername(tag: string): string | null {
   const t = normalizeUsername(tag);
   if (!USERNAME_RE.test(t)) return 'Тег: 3–20 символов, латиница, цифры и «_»';
-  if (isUsernameTaken(t, exceptUserId)) return 'Этот тег уже занят';
   return null;
+}
+
+/** True when nobody else holds `usernames/{tag}`. Errors count as free: the reservation decides anyway. */
+export async function isUsernameFree(tag: string, ownUid?: string): Promise<boolean> {
+  const t = normalizeUsername(tag);
+  if (!USERNAME_RE.test(t)) return false;
+  try {
+    const snap = await getDoc(doc(db, 'usernames', t));
+    return !snap.exists() || (!!ownUid && (snap.data() as { uid?: string }).uid === ownUid);
+  } catch {
+    return true;
+  }
 }
 
 /** Splits public vs private user fields, ensuring hidden contact emails never enter public `users`. */
@@ -667,11 +718,21 @@ export function isFollowing(followerId: string | undefined, targetId: string): b
   return (cols.follows.get(targetId)?.followers || []).includes(followerId);
 }
 
+/**
+ * Adds or removes only `followerId` (arrayUnion / arrayRemove), so a cache that hasn't loaded the
+ * list, or loaded it a moment ago, can never overwrite other people's follows.
+ */
 export function toggleFollow(followerId: string, targetId: string): { following: boolean; count: number } {
   const list = cols.follows.get(targetId)?.followers || [];
   const following = list.includes(followerId);
   const next = following ? list.filter((id) => id !== followerId) : [...list, followerId];
-  void cols.follows.set({ id: targetId, followers: next }).catch(() => undefined);
+  cols.follows.map.set(targetId, { id: targetId, followers: next });
+  emitStore();
+  void setDoc(
+    doc(db, 'follows', targetId),
+    { id: targetId, followers: following ? arrayRemove(followerId) : arrayUnion(followerId) },
+    { merge: true }
+  ).catch((e) => console.warn('[firestore] follow', e));
   if (!following) {
     bumpStat(targetId, 'follow');
     const name = actorName(followerId);
@@ -682,9 +743,11 @@ export function toggleFollow(followerId: string, targetId: string): { following:
 
 // ---------------- PLAYLISTS ----------------
 
-export function getPlaylists(ownerId?: string): Playlist[] {
-  const all = PL.all().sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
-  return ownerId ? all.filter((p) => p.ownerId === ownerId) : all;
+/** One person's playlists (watch playlists:{ownerId}; the signed-in person's own are always watched). */
+export function getPlaylists(ownerId: string): Playlist[] {
+  return PL.all()
+    .filter((p) => p.ownerId === ownerId)
+    .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
 }
 
 function onAddedToPlaylist(karaokeId: string, ownerId: string) {

@@ -5,6 +5,7 @@
 // of the project's firestore.rules and of this file next to it, so the imports resolve there):
 //   RULES=./firestore.rules npx firebase emulators:exec --only firestore --project demo-karaoke "node --test firestore.rules.test.mjs"
 import { test, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import firebase from 'firebase/compat/app';
@@ -226,6 +227,29 @@ test('follows: only add or remove yourself', async () => {
   await assertSucceeds(as('bob').doc('follows/alice').set({ id: 'alice', followers: ['carol'] }));
   await assertSucceeds(as('alice').doc('follows/bob').set({ id: 'bob', followers: ['alice'] }));
   await assertFails(as('alice').doc('follows/carol').set({ id: 'carol', followers: ['bob'] }));
+});
+
+test('follows: arrayUnion / arrayRemove of yourself (lib/storage toggleFollow), others kept', async () => {
+  const arrayUnion = (v) => firebase.firestore.FieldValue.arrayUnion(v);
+  const follow = (who, target, fn) => as(who).doc(`follows/${target}`).set({ id: target, followers: fn(who) }, { merge: true });
+  await assertSucceeds(follow('carol', 'alice', arrayUnion));
+  await assertSucceeds(follow('carol', 'alice', arrayRemove));
+  await assertSucceeds(follow('alice', 'carol', arrayUnion)); // creates the list
+  await assertFails(as('carol').doc('follows/alice').set({ id: 'alice', followers: arrayRemove('bob') }, { merge: true }));
+  await assertFails(as('carol').doc('follows/alice').set({ id: 'alice', followers: arrayUnion('dave') }, { merge: true }));
+  let left;
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    left = (await ctx.firestore().doc('follows/alice').get()).data();
+  });
+  assert.deepEqual(left.followers, ['bob']);
+});
+
+test('on-demand reads: single-field queries the app uses are allowed for guests', async () => {
+  await assertSucceeds(guest().collection('comments').where('karaokeId', '==', 'k1').get());
+  await assertSucceeds(guest().collection('playlists').where('ownerId', '==', 'alice').get());
+  await assertSucceeds(guest().doc('usernames/alice').get());
+  await assertSucceeds(guest().doc('follows/alice').get());
+  await assertSucceeds(guest().doc('users/alice').get());
 });
 
 test('likes and playlists: own only', async () => {

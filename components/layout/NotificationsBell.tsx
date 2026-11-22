@@ -4,7 +4,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Bell } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { useDataVersion } from '@/components/DataProvider';
+import { useDataVersion, useWatch } from '@/components/DataProvider';
+import { loadCommentText } from '@/lib/store';
 import { getKaraokeById, getNotifications, markNotificationsRead, getUserById } from '@/lib/storage';
 import { markProjectWarningsRead, subscribeProjectWarningNotifications } from '@/lib/project-moderation';
 import { AppNotification } from '@/lib/types';
@@ -69,6 +70,14 @@ function AccountNotifications({ userId }: { userId: string }) {
 
   const items = [...getNotifications(userId), ...projectWarnings].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   const unread = items.filter((n) => !n.read).length;
+  const shown = open ? items.slice(0, 30) : [];
+
+  // Only while the list is open: followers' profiles (for the link to them) and quoted replies, one by one.
+  useWatch(shown.map((n) => n.type === 'follow' && n.actorId && `user:${n.actorId}`));
+  const replyIds = shown.map((n) => (n.type === 'reply' ? n.commentId : undefined)).filter(Boolean).join(' ');
+  useEffect(() => {
+    if (replyIds) replyIds.split(' ').forEach((id) => void loadCommentText(id));
+  }, [replyIds]);
 
   function markAllRead() {
     markNotificationsRead(userId);
@@ -105,7 +114,7 @@ function AccountNotifications({ userId }: { userId: string }) {
             </p>
           ) : (
             <ul>
-              {items.slice(0, 30).map((n) => {
+              {shown.map((n) => {
                 const href = linkFor(n);
                 const body = (
                   <>
