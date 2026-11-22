@@ -8,7 +8,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Karaoke } from '@/lib/types';
-import { ExportFormat, VideoQuality, getPreferredQuality, renderKaraokeVideo, videoFileName } from '@/lib/video-render';
+import { ExportFormat, VideoClipRange, VideoQuality, getPreferredQuality, renderKaraokeVideo, videoFileName } from '@/lib/video-render';
 import { addDownloadRecord, getKaraokeById, registerDownload, uid } from '@/lib/storage';
 import { useAuth } from '@/context/AuthContext';
 
@@ -19,6 +19,7 @@ export interface DownloadJob {
   karaoke: Karaoke;
   format: ExportFormat;
   quality: VideoQuality;
+  clip?: VideoClipRange;
   status: JobStatus;
   progress: number; // 0..1
   url?: string;
@@ -34,7 +35,7 @@ interface DownloadsApi {
   /** Progress of the job being rendered (0..1), or null. */
   activeProgress: number | null;
   /** `quality` defaults to the one last chosen in the download menu. */
-  startDownload: (karaoke: Karaoke, format: ExportFormat, quality?: VideoQuality) => void;
+  startDownload: (karaoke: Karaoke, format: ExportFormat, quality?: VideoQuality, clip?: VideoClipRange) => void;
   cancelJob: (id: string) => void;
   saveAgain: (id: string) => void;
   panelOpen: boolean;
@@ -85,8 +86,8 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     renderKaraokeVideo(next.karaoke, next.format, {
       signal: ctrl.signal,
       quality: next.quality,
+      clip: next.clip,
       onProgress: (share) => {
-        // Re-render the panel at most every 1 %.
         if (share - lastShown >= 0.01 || share === 1) {
           lastShown = share;
           patch(next.id, { progress: share });
@@ -95,7 +96,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     })
       .then(({ blob, ext }) => {
         const url = URL.createObjectURL(blob);
-        const fileName = videoFileName(next.karaoke, next.format, ext, next.quality);
+        const fileName = videoFileName(next.karaoke, next.format, ext, next.quality, next.clip);
         // Mark done and release the oldest finished videos still held in memory.
         setJobs((prev) => {
           let kept = 0;
@@ -153,28 +154,40 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [busy]);
 
-  const startDownload = useCallback((karaoke: Karaoke, format: ExportFormat, quality: VideoQuality = getPreferredQuality()) => {
-    setJobs((prev) => {
-      // The same video already in progress: just show it.
-      if (
-        prev.some(
-          (j) =>
-            j.karaoke.id === karaoke.id &&
-            j.format === format &&
-            j.quality === quality &&
-            (j.status === 'queued' || j.status === 'rendering')
-        )
-      ) {
-        return prev;
-      }
-      // Newest on top.
-      return [
-        { id: 'dl-' + uid(), karaoke, format, quality, status: 'queued', progress: 0, createdAt: new Date().toISOString() },
-        ...prev,
-      ];
-    });
-    setPanelOpen(true);
-  }, []);
+  const startDownload = useCallback(
+    (karaoke: Karaoke, format: ExportFormat, quality: VideoQuality = getPreferredQuality(), clip?: VideoClipRange) => {
+      setJobs((prev) => {
+        if (
+          prev.some(
+            (j) =>
+              j.karaoke.id === karaoke.id &&
+              j.format === format &&
+              j.quality === quality &&
+              j.clip?.startSec === clip?.startSec &&
+              j.clip?.durationSec === clip?.durationSec &&
+              (j.status === 'queued' || j.status === 'rendering')
+          )
+        ) {
+          return prev;
+        }
+        return [
+          {
+            id: 'dl-' + uid(),
+            karaoke,
+            format,
+            quality,
+            clip,
+            status: 'queued',
+            progress: 0,
+            createdAt: new Date().toISOString(),
+          },
+          ...prev,
+        ];
+      });
+      setPanelOpen(true);
+    },
+    []
+  );
 
   const cancelJob = useCallback(
     (id: string) => {

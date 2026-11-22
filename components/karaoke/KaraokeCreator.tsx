@@ -3,10 +3,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Karaoke, LyricLine, Visibility } from '@/lib/types';
+import { Karaoke, LyricLine, LyricWord, Visibility } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
 import { saveKaraoke, updateKaraoke, getKaraokeById, fetchKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid, getGenres, MAX_GENRES } from '@/lib/storage';
 import { pluralRu, safeMediaUrl } from '@/lib/format';
+import { contrastRatio } from '@/lib/karaoke-fill';
 import { isBlobRef, putBlob, resolveBlobUrl } from '@/lib/blob-store';
 import {
   DEFAULT_FONTS,
@@ -22,11 +23,19 @@ import {
 import { alignLyrics, isAlignerOnline, localAccessState, LOCAL_ACCESS_HINT } from '@/lib/alignment';
 import { useDownloads } from '@/context/DownloadsContext';
 import { compressAudio, needsCompression } from '@/lib/audio-compress';
-import Tutorial from '@/components/ui/Tutorial';
 import CoverCropModal from '@/components/karaoke/CoverCropModal';
 import { cropToBlob, looksLikeImage, openImageFile, saveCover, type CropRect } from '@/lib/cover';
 
 const STEPS = ['Аудио и информация', 'Текст и тайминг', 'Стиль', 'Доступ'] as const;
+
+const STYLE_THEMES = [
+  { id: 'amber', name: 'Янтарная сцена', bg: '#1d1b3a', active: '#ffb547', text: '#f4f4f5', font: 'Onest' },
+  { id: 'vinyl', name: 'Тёплый винил', bg: '#231815', active: '#ff7a45', text: '#f5ebe6', font: 'Playfair Display' },
+  { id: 'indie', name: 'Полуночный инди', bg: '#0f172a', active: '#38bdf8', text: '#e2e8f0', font: 'Space Grotesk' },
+  { id: 'minimal', name: 'Чистый минимал', bg: '#121214', active: '#ffffff', text: '#a1a1aa', font: 'Inter' },
+  { id: 'club', name: 'Неоновый клуб', bg: '#160d29', active: '#fb7185', text: '#f8fafc', font: 'Unbounded' },
+  { id: 'cinema', name: 'Кинотитр', bg: '#141917', active: '#fde047', text: '#e7e5e4', font: 'Georgia' },
+] as const;
 
 // The lyrics block can only be dragged inside the safe area, split into zones 1-3 (top / middle / bottom).
 const ZONE_TOP = 14;
@@ -49,6 +58,7 @@ interface Line {
   text: string;
   time: number;
   end: number;
+  words?: LyricWord[];
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -96,6 +106,8 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   const [rawText, setRawText] = useState('');
   const [lines, setLines] = useState<Line[]>([]);
   const [audioTime, setAudioTime] = useState<number | null>(null);
+  const [tapMode, setTapMode] = useState(false);
+  const [tapIdx, setTapIdx] = useState(0);
 
   // Step 3
   const [font, setFont] = useState('Onest');
@@ -165,6 +177,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
         text: l.text,
         time: l.time,
         end: l.end ?? k.lyrics[i + 1]?.time ?? l.time + 4,
+        words: l.words,
       }));
       setLines(loaded);
       setRawText(loaded.map((l) => l.text).join('\n'));
@@ -288,7 +301,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     setLines((prev) => {
       let cursor = prev.length ? prev[prev.length - 1].end + 0.5 : 0;
       return texts.map((t, i) => {
-        if (prev[i]) return { ...prev[i], text: t };
+        if (prev[i]) return { ...prev[i], text: t, words: prev[i].text === t ? prev[i].words : undefined };
         const line = { id: `l-${Date.now()}-${i}`, text: t, time: round1(cursor), end: round1(cursor + 3.5) };
         cursor += 4;
         return line;
@@ -331,7 +344,18 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       const blob = await (await fetch(audioUrl)).blob();
       const res = await alignLyrics(blob, audioName, lines.map((l) => l.text));
       const r2 = (n: number) => Math.round(n * 100) / 100;
-      setLines((prev) => prev.map((l, i) => (res.lines[i] ? { ...l, time: r2(res.lines[i].time), end: r2(res.lines[i].end) } : l)));
+      setLines((prev) =>
+        prev.map((l, i) =>
+          res.lines[i]
+            ? {
+                ...l,
+                time: r2(res.lines[i].time),
+                end: r2(res.lines[i].end),
+                words: res.lines[i].words?.map((w) => ({ text: w.text, time: r2(w.time), end: r2(w.end) })),
+              }
+            : l
+        )
+      );
       setLineConfidence(Object.fromEntries(lines.map((l, i) => [l.id, res.lines[i]?.confidence ?? 0])));
       const weak = res.lines.filter((l) => l.confidence < 0.5).length;
       showToast(
@@ -345,7 +369,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   };
 
   const patchLine = (i: number, patch: Partial<Line>) =>
-    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, words: undefined, ...patch } : l)));
 
   const removeLine = (i: number) => {
     const next = lines.filter((_, idx) => idx !== i);
@@ -358,6 +382,60 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
     if (t === undefined) return showToast('Загрузите аудио, чтобы отмечать моменты');
     patchLine(i, { [field]: round1(t) } as Partial<Line>);
   };
+
+  const startTapSync = (fromBeginning = false) => {
+    if (!audioUrl || lines.length === 0) return showToast('Нужны аудио и текст песни');
+    setTapIdx(0);
+    setTapMode(true);
+    const el = audioEl.current;
+    if (el) {
+      if (fromBeginning || el.currentTime >= (el.duration || 1) - 1) el.currentTime = 0;
+      void el.play().catch(() => {});
+    }
+  };
+
+  const stampTapLine = () => {
+    const el = audioEl.current;
+    if (!el || tapIdx >= lines.length) return;
+    if (el.paused) {
+      void el.play().catch(() => {});
+    }
+    const t = round1(el.currentTime || 0);
+    const idx = tapIdx;
+    setLines((prev) =>
+      prev.map((l, i) => {
+        if (i === idx) {
+          return { ...l, time: t, end: round1(Math.max(t + 3.2, l.end)), words: undefined };
+        }
+        if (i === idx - 1) {
+          return { ...l, end: round1(Math.max(l.time + 0.3, Math.min(l.end, t - 0.1))) };
+        }
+        return l;
+      })
+    );
+    if (idx + 1 >= lines.length) {
+      setTapMode(false);
+      showToast('Все строки размечены по Пробелу!');
+    } else {
+      setTapIdx(idx + 1);
+    }
+  };
+
+  useEffect(() => {
+    if (!tapMode || step !== 1) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('input, textarea, select, [contenteditable]')) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        stampTapLine();
+      } else if (e.key === 'Escape') {
+        setTapMode(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const handleLrcFile = (file?: File) => {
     if (!file) return;
@@ -457,9 +535,16 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
         time: l.time,
         end: l.end > l.time ? l.end : lines[i + 1]?.time ?? l.time + 4,
         text: l.text,
+        ...(l.words?.length ? { words: l.words } : {}),
       })),
     [lines]
   );
+
+  const activeContrast = contrastRatio(activeColor, backgroundColor);
+  const textContrast = contrastRatio(textColor, backgroundColor);
+  const lowContrast =
+    (activeContrast !== null && activeContrast < 2.6) ||
+    (textContrast !== null && textContrast < 3.0);
 
   const styleObj = {
     font,
@@ -613,14 +698,6 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
   return (
     <>
       {cropSrc && <CoverCropModal src={cropSrc} busy={coverSaving} onCancel={closeCrop} onDone={applyCrop} />}
-      <Tutorial
-        page="create"
-        steps={[
-          { title: 'Четыре шага', text: 'Аудио и информация → текст и тайминг → стиль → доступ. Переключаться между шагами можно в любой момент.' },
-          { title: 'Тайминги', text: 'Для каждой строки укажите начало и конец. Пауза между строками не растягивает заливку.' },
-          { title: 'Стиль и предпросмотр', text: 'Блок с текстом в предпросмотре можно перетаскивать вверх и вниз — в пределах зон 1–3.' },
-        ]}
-      />
 
       <div className="pg" style={{ maxWidth: 1280 }}>
         {editId && (
@@ -753,7 +830,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                         </label>
                         {coverImage && <button className="bt sm gh" onClick={() => setCoverImage(undefined)}>Убрать</button>}
                       </div>
-                      <span className="sm">Без обложки в каталоге при наведении будет играть текст песни.</span>
+                      <span className="sm">В каталоге при наведении на карточку оживает текст песни — даже поверх обложки.</span>
                     </div>
                   </div>
                 )}
@@ -763,7 +840,7 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
             {/* ---------------- STEP 2 ---------------- */}
             {step === 1 && (
               <>
-                {demoAudio && <p className="mu sm" style={{ margin: 0 }}>С демо-мелодией кнопки «⏱» недоступны: впишите тайминги вручную.</p>}
+                {demoAudio && <p className="mu sm" style={{ margin: 0 }}>С демо-мелодией кнопки «⏱» и набивка по Пробелу недоступны: впишите тайминги вручную.</p>}
 
                 <div className="card stack">
                   <label className="fld">
@@ -776,6 +853,15 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                       <input type="file" hidden accept=".lrc,.txt" onChange={(e) => handleLrcFile(e.target.files?.[0])} />
                     </label>
                     <button className="bt sm gh" onClick={() => onTextChange(SAMPLE_TEXT)}>Вставить пример</button>
+                    <button
+                      className="bt sm"
+                      onClick={() => (tapMode ? setTapMode(false) : startTapSync())}
+                      disabled={!audioUrl || lines.length === 0}
+                      aria-pressed={tapMode}
+                      title="Слушайте песню и нажимайте Пробел в начале каждой строки"
+                    >
+                      {tapMode ? 'Остановить набивку' : 'Набить по Пробелу'}
+                    </button>
                     <button
                       className="bt sm"
                       onClick={runAutoTiming}
@@ -792,6 +878,25 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                     {alignerOnline === false && <span className="mu sm">сервис не запущен</span>}
                   </div>
                 </div>
+
+                {tapMode && audioUrl && lines.length > 0 && (
+                  <div className="card tap-bar" role="region" aria-label="Живая разметка по Пробелу">
+                    <div className="tap-head">
+                      <b>Строка {Math.min(tapIdx + 1, lines.length)} из {lines.length}</b>
+                      <div className="row" style={{ gap: 6 }}>
+                        <button type="button" className="bt sm gh" onClick={() => startTapSync(true)}>Сначала (0:00)</button>
+                        <button type="button" className="bt sm gh" onClick={() => setTapMode(false)}>Готово</button>
+                      </div>
+                    </div>
+                    <button type="button" className="bt pr tap-hit" onClick={stampTapLine}>
+                      <span>Нажмите <b>Пробел</b> или сюда, когда начнётся строка:</span>
+                      <strong>«{lines[tapIdx]?.text}»</strong>
+                    </button>
+                    {lines[tapIdx + 1] && (
+                      <span className="mu sm">Следующая: «{lines[tapIdx + 1].text}»</span>
+                    )}
+                  </div>
+                )}
 
                 {lines.length > 0 && (
                   <div className="card">
@@ -873,11 +978,43 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
                 </div>
 
                 <div className="card stack">
+                  <b>Готовые сцены и цвета</b>
+                  <div className="theme-grid" role="group" aria-label="Цветовые сцены">
+                    {STYLE_THEMES.map((t) => {
+                      const active =
+                        backgroundColor.toLowerCase() === t.bg.toLowerCase() &&
+                        activeColor.toLowerCase() === t.active.toLowerCase() &&
+                        textColor.toLowerCase() === t.text.toLowerCase();
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className="theme-card"
+                          aria-pressed={active}
+                          onClick={() => {
+                            setBackgroundColor(t.bg);
+                            setActiveColor(t.active);
+                            setTextColor(t.text);
+                            if (!fontFile) pickFont(t.font);
+                          }}
+                          style={{ background: t.bg, color: t.text }}
+                        >
+                          <span className="theme-sw" style={{ color: t.active }}>Аа</span>
+                          <b>{t.name}</b>
+                        </button>
+                      );
+                    })}
+                  </div>
                   <div className="cl">
                     <label className="fld">Активная строка<input type="color" value={activeColor} onChange={(e) => setActiveColor(e.target.value)} className="in" style={{ height: 40, padding: 3 }} /></label>
                     <label className="fld">Текст<input type="color" value={textColor} onChange={(e) => setTextColor(e.target.value)} className="in" style={{ height: 40, padding: 3 }} /></label>
                     <label className="fld">Фон<input type="color" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} className="in" style={{ height: 40, padding: 3 }} /></label>
                   </div>
+                  {lowContrast && (
+                    <p className="sm" style={{ color: '#fbbf24', margin: 0 }}>
+                      Выбранные цвета близки по яркости — строки могут плохо читаться в плеере и видео.
+                    </p>
+                  )}
                   <label className="row sm" style={{ gap: 10, cursor: 'pointer' }}>
                     <input
                       type="checkbox"

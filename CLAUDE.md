@@ -14,9 +14,13 @@
 - Genres: a project's `tags` are picked in the editor from `config/genres.list` (admin page /admin/genres; `DEFAULT_GENRES` in lib/storage.ts until saved), max 6. Only admins may write `config/genres`; `config/aligner` ({url, updatedAt}) is written only by the auto-timing service's own Firebase account, whose uid sits in `services/aligner` (set in the console, no client access); see aligner/README.md.
 - Email confirmation and password reset use Firebase Auth letters (`sendEmailVerification` on sign-up, /forgot page, `VerifyEmailBanner`); the reset answer never reveals whether an address is registered. Email change (/studio/settings → Аккаунт) re-checks the password and uses `verifyBeforeUpdateEmail`; AuthContext then copies the new sign-in email into `userPrivate` (after refreshing the token, since the rules compare it), or signs out to /login?email-changed=1 if Firebase ended the old session.
 - Covers are cropped to 768×768 JPEG (`lib/cover.ts`) and uploaded to Supabase under `covers/`; the bucket must allow `image/*` (see `supabase/storage.sql`), otherwise `saveCover` falls back to a data URL inside the track. Older tracks may still hold data-URL covers until an admin runs «Перенести обложки» on /admin/tracks.
-- Only guest plays and guests' seen tutorials stay in `localStorage`; signed-in tutorial marks are in `users/{id}.seenTutorials`.
+- Guests listen without a limit. Only the guest id (`getGuestId`, so a guest's interactions count once per track) stays in `localStorage`. The onboarding tips are gone; `users/{id}.seenTutorials` is a leftover field the rules still allow.
 - Firestore can be read without auth over REST: `https://firestore.googleapis.com/v1/projects/karaoke-craft/databases/(default)/documents/<collection>`. Public data only: guests may step `viewsCount`, `recommendationScore`, `isFeatured` on karaokes and add to `events` / `interactions`; personal collections need the owner's sign-in.
 - Changing `firestore.rules` does nothing until it is published (`firebase deploy --only firestore:rules`, or Firebase Console → Firestore → Rules). The Firebase CLI is not installed on this machine. Publish rules before pushing code that relies on them.
+
+## Pages
+- Routes whose layout `generateMetadata` reads `params` (`/karaoke/[id]`, `/u/[tag]`, `/artist/[slug]`, `/tag/[tag]`) keep the client page in `*PageClient.tsx` and a server `page.tsx` that renders it plus `<DynamicMarker />` (`components/DynamicMarker.tsx`). Without the marker Next reports "URL data in `generateMetadata()`".
+- Lyric lines may carry word timings (`lyrics[].words`, from the aligner); `lib/karaoke-fill.ts` turns them into the fill share used by the player, the catalog tiles and the video export.
 
 ## Stats
 - `viewsCount` is the ▶ number. It grows only in `registerListen` (45% of the track really heard, once per run). The author's own listens and page opens never count.

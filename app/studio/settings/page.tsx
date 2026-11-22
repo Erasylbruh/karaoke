@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { resetTutorials, validateUsername } from '@/lib/storage';
+import { validateUsername } from '@/lib/storage';
 import { uploadPublicFile } from '@/lib/blob-store';
 import { safeMediaUrl } from '@/lib/format';
 import { User } from '@/lib/types';
@@ -170,18 +170,6 @@ function StudioSettingsForm({ user }: { user: User }) {
             </button>
           </form>
           <ChangeEmailForm />
-          <div className="card">
-            <p className="mu sm" style={{ marginTop: 0 }}>Обучающие подсказки на страницах можно показать снова.</p>
-            <button
-              className="bt"
-              onClick={() => {
-                resetTutorials(user.id);
-                flash(true, 'Подсказки включены — откройте любую страницу');
-              }}
-            >
-              Показать подсказки заново
-            </button>
-          </div>
           <DeleteAccountForm />
         </div>
       )}

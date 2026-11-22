@@ -22,11 +22,9 @@ import { uploadPublicFile } from './blob-store';
 
 const LOCAL_KEYS = {
   GUEST: 'karaokecraft_v2_guest',
-  TUTORIAL: 'karaokecraft_v2_tutorial',
 };
 
 export const RECOMMEND_THRESHOLD = 60;
-export const GUEST_PLAY_LIMIT = 3;
 
 const INTERACTION_WEIGHT: Record<InteractionType, number> = {
   listen: 1,
@@ -94,12 +92,12 @@ function normalizeKaraoke(k: Karaoke): Karaoke {
   };
 }
 
-/** Recommendation score (0-100) shown to authors as a 1-10 visibility grade. */
-export function visibilityRating(score: number): { value: number; label: string; kind: 'ok' | 'wn' | 'dg' } {
+/** Recommendation score (0-100) shown to authors as a friendly promotion stage. */
+export function visibilityRating(score: number): { value: number; label: string; kind: 'ok' | 'ac' | 'wn' } {
   const value = Math.max(1, Math.min(10, Math.round(score / 10)));
-  if (value >= 7) return { value, label: 'Отличная', kind: 'ok' };
-  if (value >= 4) return { value, label: 'Хорошая', kind: 'wn' };
-  return { value, label: 'Плохая', kind: 'dg' };
+  if (score >= RECOMMEND_THRESHOLD) return { value, label: 'В рекомендациях', kind: 'ok' };
+  if (score >= 30) return { value, label: 'Набирает слушателей', kind: 'ac' };
+  return { value, label: 'Новый релиз', kind: 'wn' };
 }
 
 // ---------------- KARAOKES ----------------
@@ -727,35 +725,20 @@ export function deletePlaylist(playlistId: string) {
 
 // ---------------- GUEST LIMITS (per browser) ----------------
 
+/** A guest's random id, kept in the browser: guests' interactions count once per track (see registerInteraction). */
 interface GuestState {
   id: string;
-  played: string[];
 }
 
 function readGuest(): GuestState {
   const g = localGet<GuestState | null>(LOCAL_KEYS.GUEST, null);
   if (g) return g;
-  const fresh = { id: 'guest-' + Math.random().toString(36).slice(2, 10), played: [] };
+  const fresh = { id: 'guest-' + Math.random().toString(36).slice(2, 10) };
   localSet(LOCAL_KEYS.GUEST, fresh);
   return fresh;
 }
 
 export const getGuestId = () => readGuest().id;
-
-export function guestPlaysLeft(karaokeId?: string): number {
-  const g = readGuest();
-  if (karaokeId && g.played.includes(karaokeId)) return GUEST_PLAY_LIMIT - g.played.length + 1;
-  return Math.max(0, GUEST_PLAY_LIMIT - g.played.length);
-}
-
-export function registerGuestPlay(karaokeId: string): boolean {
-  const g = readGuest();
-  if (g.played.includes(karaokeId)) return true;
-  if (g.played.length >= GUEST_PLAY_LIMIT) return false;
-  g.played.push(karaokeId);
-  localSet(LOCAL_KEYS.GUEST, g);
-  return true;
-}
 
 // ---------------- STUDIO STATS ----------------
 
@@ -768,40 +751,6 @@ export function getAuthorStats(authorId: string) {
     followers: getFollowersCount(authorId),
     featured: live.filter((k) => k.isFeatured).length,
   };
-}
-
-// ---------------- TUTORIAL ----------------
-
-const localTutorials = () => localGet<Record<string, boolean>>(LOCAL_KEYS.TUTORIAL, {});
-
-export function isTutorialSeen(userKey: string, page: string): boolean {
-  const local = localTutorials();
-  const user = userKey === 'guest' ? undefined : U.get(userKey);
-  if (!user) return !!local[`${userKey}:${page}`];
-  if (user.seenTutorials?.includes(page)) return true;
-  if (local[`${userKey}:${page}`] || local[`guest:${page}`]) {
-    markTutorialSeen(userKey, page);
-    return true;
-  }
-  return false;
-}
-
-export function markTutorialSeen(userKey: string, page: string) {
-  const user = userKey === 'guest' ? undefined : U.get(userKey);
-  if (user) {
-    if (!user.seenTutorials?.includes(page)) U.patch(user.id, { seenTutorials: [...(user.seenTutorials ?? []), page] });
-    return;
-  }
-  const m = localTutorials();
-  m[`${userKey}:${page}`] = true;
-  localSet(LOCAL_KEYS.TUTORIAL, m);
-}
-
-export function resetTutorials(userKey: string) {
-  const m = localTutorials();
-  Object.keys(m).forEach((k) => (k.startsWith(userKey + ':') || k.startsWith('guest:')) && delete m[k]);
-  localSet(LOCAL_KEYS.TUTORIAL, m);
-  if (U.get(userKey)) U.patch(userKey, { seenTutorials: [] });
 }
 
 // ---------------- DOWNLOAD HISTORY ----------------

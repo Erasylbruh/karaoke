@@ -10,12 +10,14 @@
  */
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
+import type { LyricWord } from '@/lib/types';
 
 export interface AlignedLine {
   time: number;
   end: number;
   /** Share of the line's words that were actually recognised (0..1). Low = check by hand. */
   confidence: number;
+  words: LyricWord[];
 }
 
 export interface AlignmentResult {
@@ -163,10 +165,18 @@ export async function alignLyrics(audio: Blob, fileName: string, lines: string[]
   const data = await res.json().catch(() => null);
   if (!res.ok || !data) throw new Error(data?.error ? `Авто-тайминг: ${data.error}` : 'Авто-тайминг не удался');
   return {
-    lines: (data.lines as { start: number; end: number; confidence: number }[]).map((l) => ({
+    lines: (
+      data.lines as {
+        start: number;
+        end: number;
+        confidence: number;
+        words?: { text: string; start: number; end: number }[];
+      }[]
+    ).map((l) => ({
       time: l.start,
       end: l.end,
       confidence: l.confidence,
+      words: (l.words ?? []).map((w) => ({ text: w.text, time: w.start, end: w.end })),
     })),
     language: data.language,
     confidence: data.confidence,

@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
 import { getAuthorStats, getKaraokesByAuthor, visibilityRating } from '@/lib/storage';
-import Tutorial from '@/components/ui/Tutorial';
 
 const fmt = (n: number) => n.toLocaleString('ru-RU');
 
@@ -31,14 +30,6 @@ export default function StudioOverview() {
 
   return (
     <>
-      <Tutorial
-        page="studio"
-        steps={[
-          { title: 'Creator Studio', text: 'Ваш рабочий кабинет: статистика, контент, аналитика и настройки профиля.' },
-          { title: 'Контент', text: 'В разделе «Контент» меняйте доступ к караоке: публично, по ссылке или только для вас.' },
-          { title: 'Видимость', text: 'Видимость показывает, насколько активно сайт показывает трек: Отличная (7–10), Хорошая (4–6), Плохая (1–3). Она растёт от реакции слушателей.' },
-        ]}
-      />
       <h1 className="pg-h">Добро пожаловать, {user.name}</h1>
       <p className="pg-sub">Сводка по вашим караоке.</p>
 
@@ -72,7 +63,7 @@ export default function StudioOverview() {
                   <td>
                     {(() => {
                       const v = visibilityRating(k.recommendationScore);
-                      return <span className={`pill ${v.kind}`}>{v.label} · {v.value}/10</span>;
+                      return <span className={`pill ${v.kind}`}>{v.label}</span>;
                     })()}
                   </td>
                 </tr>

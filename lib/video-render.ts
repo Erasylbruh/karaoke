@@ -26,6 +26,7 @@ import { fontCss } from '@/lib/fonts';
 import { resolveBlobUrl } from '@/lib/blob-store';
 import { getAuthor } from '@/lib/storage';
 import { synthPlayer } from '@/lib/audio-synthesizer';
+import { lineFillShare, vocalCueDots } from '@/lib/karaoke-fill';
 
 /** reel = 9:16; landscape = 16:9 «Пластинка+»; landscape-tv = 16:9 «Караоке-ТВ». */
 export type ExportFormat = 'reel' | 'landscape' | 'landscape-tv';
@@ -313,6 +314,7 @@ function drawLyrics(
   });
 
   const activeIdx = lyrics.reduce((a, line, idx) => (t >= line.time ? idx : a), -1);
+  const cue = vocalCueDots(lyrics, activeIdx, t);
   // Smooth scroll: glide from the previous line to the active one over 0.35 s.
   let offset = (tops[0] ?? 0) - rowH - gap;
   if (activeIdx >= 0) {
@@ -329,6 +331,17 @@ function drawLyrics(
   blocks.forEach((b, idx) => {
     const top = anchorY + tops[idx] - offset;
     if (top + b.rows.length * rowH < minY || top > maxY) return;
+    if (cue && cue.targetIdx === idx) {
+      const dotR = Math.max(4, fontSize * 0.11);
+      const dotY = top - dotR * 1.8;
+      for (let d = 0; d < 3; d++) {
+        ctx.globalAlpha = d < cue.lit ? 0.95 : 0.25;
+        ctx.fillStyle = d < cue.lit ? ac : tx;
+        ctx.beginPath();
+        ctx.arc(x + dotR + d * dotR * 3.1, dotY, dotR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
     let p = 0;
     let alpha = 0.3;
     if (idx < activeIdx) {
@@ -489,12 +502,10 @@ function drawTonearm(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: n
   ctx.fill();
 }
 
-/** Share of line `idx` already sung at `t`. */
+/** Share of line `idx` already sung at `t` (uses word-level DTW timings when present). */
 function lineShare(karaoke: Karaoke, idx: number, t: number, totalSec: number) {
-  if (karaoke.style?.fillAnimation === false) return t >= karaoke.lyrics[idx].time ? 1 : 0;
   const line = karaoke.lyrics[idx];
-  const end = line.end ?? karaoke.lyrics[idx + 1]?.time ?? totalSec;
-  return clamp01((t - line.time) / Math.max(0.1, end - line.time));
+  return lineFillShare(line, karaoke.lyrics[idx + 1]?.time, t, totalSec, karaoke.style?.fillAnimation !== false);
 }
 
 /**
@@ -723,10 +734,16 @@ export function drawVideoFrame(
   ctx.globalAlpha = 1;
 }
 
+export interface VideoClipRange {
+  startSec: number;
+  durationSec: number;
+}
+
 export interface RenderOptions {
   onProgress?: (share: number) => void;
   signal?: AbortSignal;
   quality?: VideoQuality;
+  clip?: VideoClipRange;
 }
 
 export interface RenderResult {
@@ -760,31 +777,76 @@ async function loadFonts(karaoke: Karaoke) {
   );
 }
 
+function shiftKaraokeForClip(karaoke: Karaoke, clip?: VideoClipRange): Karaoke {
+  if (!clip) return karaoke;
+  const start = Math.max(0, clip.startSec);
+  const dur = Math.max(5, clip.durationSec);
+  const shifted = karaoke.lyrics
+    .filter((l, i) => {
+      const end = l.end ?? karaoke.lyrics[i + 1]?.time ?? l.time + 4;
+      return end >= start - 2 && l.time <= start + dur + 3;
+    })
+    .map((l) => ({
+      ...l,
+      time: Math.round((l.time - start) * 100) / 100,
+      end: l.end !== undefined ? Math.round((l.end - start) * 100) / 100 : undefined,
+      words: l.words?.map((w) => ({
+        ...w,
+        time: Math.round((w.time - start) * 100) / 100,
+        end: Math.round((w.end - start) * 100) / 100,
+      })),
+    }));
+  return { ...karaoke, duration: dur, lyrics: shifted };
+}
+
+function sliceAudioBufferWithFade(audio: AudioBuffer, clip?: VideoClipRange): AudioBuffer {
+  if (!clip) return audio;
+  const sr = audio.sampleRate;
+  const startSample = Math.min(audio.length - 1, Math.max(0, Math.floor(clip.startSec * sr)));
+  const maxLen = Math.max(1, audio.length - startSample);
+  const len = Math.min(maxLen, Math.max(1, Math.round(clip.durationSec * sr)));
+  const out = new AudioBuffer({ length: len, numberOfChannels: audio.numberOfChannels, sampleRate: sr });
+  const fadeSamples = Math.min(Math.floor(len / 4), Math.round(0.25 * sr));
+  for (let ch = 0; ch < audio.numberOfChannels; ch++) {
+    const src = audio.getChannelData(ch);
+    const dst = out.getChannelData(ch);
+    dst.set(src.subarray(startSample, startSample + len));
+    for (let i = 0; i < fadeSamples; i++) {
+      const gain = i / fadeSamples;
+      dst[i] *= gain;
+      dst[len - 1 - i] *= gain;
+    }
+  }
+  return out;
+}
+
 export async function renderKaraokeVideo(karaoke: Karaoke, format: ExportFormat, opts: RenderOptions = {}): Promise<RenderResult> {
-  await loadFonts(karaoke);
-  const assets = await prepareFrameAssets(karaoke);
-  const audioUrl = await resolveBlobUrl(karaoke.audioUrl);
+  const effectiveKaraoke = shiftKaraokeForClip(karaoke, opts.clip);
+  await loadFonts(effectiveKaraoke);
+  const assets = await prepareFrameAssets(effectiveKaraoke);
+  const audioUrl = await resolveBlobUrl(effectiveKaraoke.audioUrl);
   if (audioUrl && typeof VideoEncoder !== 'undefined' && typeof AudioEncoder !== 'undefined') {
     try {
-      return await renderFast(karaoke, format, audioUrl, assets, opts);
+      return await renderFast(effectiveKaraoke, format, audioUrl, assets, opts);
     } catch (e) {
       if (opts.signal?.aborted) throw abortError();
       console.warn('Fast render failed, falling back to real-time capture', e);
     }
   }
-  return renderRealtime(karaoke, format, audioUrl, assets, opts);
+  return renderRealtime(effectiveKaraoke, format, audioUrl, assets, opts);
 }
 
-async function renderFast(karaoke: Karaoke, format: ExportFormat, audioUrl: string, assets: FrameAssets, { onProgress, signal, quality = '720p' }: RenderOptions): Promise<RenderResult> {
+async function renderFast(karaoke: Karaoke, format: ExportFormat, audioUrl: string, assets: FrameAssets, { onProgress, signal, quality = '720p', clip }: RenderOptions): Promise<RenderResult> {
   const { width, height } = outputSize(format, quality);
   const res = await fetch(audioUrl, { signal });
   const actx = new AudioContext();
-  let audio: AudioBuffer;
+  let decodedAudio: AudioBuffer;
   try {
-    audio = await actx.decodeAudioData(await res.arrayBuffer());
+    decodedAudio = await actx.decodeAudioData(await res.arrayBuffer());
   } finally {
     void actx.close().catch(() => undefined);
   }
+  const audio = sliceAudioBufferWithFade(decodedAudio, clip);
 
   // H.264 + AAC in MP4 plays everywhere; VP9/VP8 + Opus in WebM where H.264 encoding is missing.
   const videoCodec = await getFirstEncodableVideoCodec(['avc', 'vp9', 'vp8'], { width, height });
@@ -841,7 +903,7 @@ async function renderFast(karaoke: Karaoke, format: ExportFormat, audioUrl: stri
  * Real-time capture: plays the track silently through Web Audio and records the canvas with
  * MediaRecorder. A Worker drives the frames, so a background tab keeps 30 fps.
  */
-async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: string | null, assets: FrameAssets, { onProgress, signal, quality = '720p' }: RenderOptions): Promise<RenderResult> {
+async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: string | null, assets: FrameAssets, { onProgress, signal, quality = '720p', clip }: RenderOptions): Promise<RenderResult> {
   const { canvas, ctx } = makeCanvas(format, quality);
   const canvasStream = canvas.captureStream(FPS);
 
@@ -879,8 +941,10 @@ async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: 
   const chunks: Blob[] = [];
   recorder.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
 
-  const duration =
+  const rawAudioDur =
     trackAudio && Number.isFinite(trackAudio.duration) && trackAudio.duration > 0 ? trackAudio.duration : karaoke.duration || 40;
+  const clipStart = clip ? Math.min(Math.max(0, clip.startSec), Math.max(0, rawAudioDur - 1)) : 0;
+  const duration = clip ? Math.min(clip.durationSec, Math.max(1, rawAudioDur - clipStart)) : rawAudioDur;
 
   const stopSound = () => {
     synthPlayer?.stop();
@@ -932,15 +996,18 @@ async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: 
       const now = performance.now();
       if (!songStartedAt && now - startTime >= INTRO_SEC * 1000) {
         songStartedAt = now;
-        if (trackAudio) void trackAudio.play().catch(() => onAbort());
-        else synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', 0);
+        if (trackAudio) {
+          if (clipStart > 0) trackAudio.currentTime = clipStart;
+          void trackAudio.play().catch(() => onAbort());
+        } else synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', clipStart);
       }
       let v: number;
       if (!songStartedAt) v = (now - startTime) / 1000;
       else if (!songEndedAt) {
-        const t = trackAudio ? trackAudio.currentTime : (now - songStartedAt) / 1000;
+        const t = trackAudio ? Math.max(0, trackAudio.currentTime - clipStart) : (now - songStartedAt) / 1000;
         if (t >= duration || trackAudio?.ended) {
           songEndedAt = now;
+          trackAudio?.pause();
           synthPlayer?.stop();
         }
         v = INTRO_SEC + Math.min(t, duration);
@@ -960,8 +1027,15 @@ async function renderRealtime(karaoke: Karaoke, format: ExportFormat, audioUrl: 
 }
 
 /** File name like "propose_vertical_1080p.mp4". */
-export function videoFileName(karaoke: Pick<Karaoke, 'title'>, format: ExportFormat, ext: string, quality: VideoQuality = '720p') {
+export function videoFileName(
+  karaoke: Pick<Karaoke, 'title'>,
+  format: ExportFormat,
+  ext: string,
+  quality: VideoQuality = '720p',
+  clip?: VideoClipRange
+) {
   const base = karaoke.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'karaoke';
   const kind = format === 'reel' ? 'vertical' : format === 'landscape-tv' ? 'horizontal_tv' : 'horizontal';
-  return `${base}_${kind}_${quality}.${ext}`;
+  const clipTag = clip ? `_clip_${Math.round(clip.durationSec)}s` : '';
+  return `${base}_${kind}_${quality}${clipTag}.${ext}`;
 }

@@ -1,9 +1,17 @@
+export interface LyricWord {
+  text: string;
+  time: number;
+  end: number;
+}
+
 export interface LyricLine {
   id: string;
   time: number; // start, in seconds
   end?: number; // end, in seconds (fill finishes here; long pauses don't slow the fill)
   text: string;
   duration?: number;
+  /** Optional word-by-word timestamps from the Whisper DTW aligner. */
+  words?: LyricWord[];
 }
 
 export type FontFamily =
