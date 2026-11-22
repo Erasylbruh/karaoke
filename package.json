@@ -10,6 +10,8 @@
     "test:storage": "node --test tests/storage-routes.test.mjs"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.1.0",
     "firebase": "^13.2.0",
     "fix-webm-duration": "^1.0.6",
     "lucide-react": "^1.61.0",

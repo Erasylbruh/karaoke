@@ -37,7 +37,9 @@ cargo test --release   # проверки сопоставления и деко
 | Переменная | По умолчанию | Что делает |
 |---|---|---|
 | `WHISPER_MODEL` | `models/ggml-small.bin` | Модель. `ggml-medium.bin` точнее, но в 2–3 раза медленнее |
-| `ALIGNER_PORT` | `8787` | Порт (сервис слушает только `127.0.0.1`) |
+| `ALIGNER_HOST` | `127.0.0.1` | Адрес, который слушает сервис. На сервере или в контейнере — `0.0.0.0`; тогда каждый запрос требует вход в аккаунт сайта |
+| `ALIGNER_PORT` | `8787` | Порт |
+| `ALIGNER_REQUIRE_AUTH` | — | `1` — требовать Firebase ID-токен у каждого запроса. Включается само, если `ALIGNER_HOST` не локальный; иначе токен нужен только запросам через туннель |
 | `ALIGNER_ORIGINS` | — | Дополнительные адреса сайта через запятую. Всегда разрешены karaokecraft.vercel.app и localhost на любом порту |
 | `ALIGNER_DEBUG` | — | Печатать каждое распознанное слово и время работы |
 | `ALIGNER_EMAIL`, `ALIGNER_PASSWORD` | — | Учётная запись сервиса для публикации адреса туннеля (см. «Учётная запись сервиса»). Удобно хранить в `aligner\.env` |
@@ -72,6 +74,22 @@ cargo test --release   # проверки сопоставления и деко
 В `services/aligner` помещается один UID, поэтому второй разработчик, запуская aligner у себя, использует ту же учётную запись (передайте email и пароль лично, не через репозиторий).
 
 Если в логе `Firebase sign-in refused`, проверьте email и пароль. Если `Firestore refused the write (403)`, значит UID в `services/aligner` не совпадает с учётной записью или на проекте ещё старые правила (`firebase deploy --only firestore:rules`).
+
+## На сервере (Docker, не проверено)
+
+`Dockerfile` и `docker-entrypoint.sh` написаны без запуска Docker: соберите образ и проверьте один запрос, прежде чем на них полагаться.
+
+```bash
+docker build -t karaokecraft-aligner aligner
+docker run -d --restart unless-stopped -p 127.0.0.1:8787:8787 -v aligner-models:/models karaokecraft-aligner
+```
+
+- При первом запуске контейнер скачивает модель `ggml-small.bin` (~470 МБ) в том `/models` и проверяет её SHA-256.
+- Внутри контейнера сервис слушает `0.0.0.0`, поэтому каждый запрос требует Firebase ID-токен вошедшего пользователя. Туннель выключен (`ALIGNER_PUBLIC=0`), `config/aligner` не нужен.
+- Сайт работает по HTTPS, поэтому и сервису нужен HTTPS-адрес: поставьте перед контейнером обратный прокси с сертификатом (например, Caddy или Nginx + Let's Encrypt), который пересылает запросы на `127.0.0.1:8787`.
+- Адрес укажите в Vercel → Environment Variables → `NEXT_PUBLIC_ALIGNER_URL` (например, `https://align.example.com`) и пересоберите сайт. CSP разрешит этот адрес сам (`next.config.ts`).
+- Если сайт открыт не только на `karaokecraft.vercel.app`, добавьте его адрес в `ALIGNER_ORIGINS` (`docker run -e ALIGNER_ORIGINS=https://ваш-домен ...`).
+- Модели нужно около 1–2 ГБ памяти; песня на 3 минуты обрабатывается от десятков секунд до нескольких минут в зависимости от процессора.
 
 ## API
 

@@ -25,7 +25,9 @@
 ## Running
 - Windows PowerShell blocks `npm.ps1`: use `npm.cmd run dev` or the `dev` entry in `.claude/launch.json`.
 - `npm.cmd run lint` and `npx tsc --noEmit` are clean; keep them that way.
-- Tests: `npm run test:storage` (storage routes, plain Node 23.6+); Firestore rules tests need the emulator (header of `tests/firestore.rules.test.mjs`).
+- Tests: `npm run test:storage` (storage routes, plain Node 23.6+); Firestore rules tests need the emulator (header of `tests/firestore.rules.test.mjs`). CI (`.github/workflows/ci.yml`) runs lint, types, both test suites and the build on every PR and push to `main`.
+- Upload quota: the sign route sums the account's files (Supabase list, `metadata.size`) and refuses beyond `STORAGE_USER_QUOTA_MB` (default 300, admins exempt); a failed listing lets the upload through. Final refusals (403/413/415) reach the editor as `StorageRefusedError` messages instead of the local-only fallback.
+- Vercel Web Analytics and Speed Insights are mounted in `app/layout.tsx` (cookieless; mentioned in /privacy). App Check (reCAPTCHA v3) starts only when `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` is set; never enforce it while REST callers lack App Check tokens (docs/FIREBASE.md).
 
 ## Git and deploy
 - Vercel rebuilds the site on every push to `main`, so work on a branch.

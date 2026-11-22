@@ -62,7 +62,16 @@ firebase deploy --only firestore:rules
 Тесты правил лежат в `tests/firestore.rules.test.mjs`. Что ещё стоит сделать:
 
 - `recommendationScore`, `likesCount`, `viewsCount`, `events`, `notifications` считать в Cloud Functions, а не на клиенте. Сейчас правила ограничивают каждый шаг (+1 и т. п.), но много шагов подряд всё ещё возможны.
-- Включить App Check для Firestore. Перед этим перевести вызовы REST без токена App Check: `lib/server-meta.ts`, проверку бана в `lib/server/storage.ts`, запись адреса в `aligner/src/tunnel.rs`.
+- Принудительную проверку App Check для Firestore (Enforce) включать только после того, как вызовы REST без токена App Check будут переведены: `lib/server-meta.ts`, проверка бана в `lib/server/storage.ts`, запись адреса в `aligner/src/tunnel.rs`. Иначе роут загрузки, не сумев прочитать профиль, будет отклонять все загрузки.
+
+## App Check (только наблюдение)
+
+Клиентская часть готова (`lib/firebase.ts`) и включается переменной `NEXT_PUBLIC_RECAPTCHA_SITE_KEY`:
+
+1. [Google reCAPTCHA Admin](https://www.google.com/recaptcha/admin) → создать ключ **reCAPTCHA v3**, домены: `karaokecraft.vercel.app` и свой домен, если есть.
+2. Firebase Console → **App Check** → Apps → веб-приложение → **reCAPTCHA v3** → вставить **секретный** ключ reCAPTCHA.
+3. Vercel → Environment Variables → `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` = **ключ сайта** (публичный) → Redeploy. CSP разрешит скрипты reCAPTCHA сам (`next.config.ts`).
+4. Firebase Console → App Check → APIs → Cloud Firestore: смотреть метрики, сколько запросов приходит без подтверждения. **Не нажимать Enforce** (см. выше).
 
 ## Хостинг
 

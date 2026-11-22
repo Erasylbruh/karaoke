@@ -1,4 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { initializeFirestore, getFirestore, connectFirestoreEmulator, Firestore } from 'firebase/firestore';
 
@@ -14,6 +15,16 @@ const firebaseConfig = {
 
 const fresh = getApps().length === 0;
 export const app = fresh ? initializeApp(firebaseConfig) : getApp();
+
+// App Check (reCAPTCHA v3) attaches a proof that requests come from this site, so scripts can be told
+// apart in Firebase Console → App Check. On only when NEXT_PUBLIC_RECAPTCHA_SITE_KEY is set.
+// Keep ENFORCEMENT OFF for Firestore: lib/server-meta.ts, the ban check in lib/server/storage.ts and the
+// aligner read or write Firestore over REST without App Check tokens, and the upload route refuses
+// uploads when it cannot read the profile — enforcement would block every upload.
+const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
+if (fresh && typeof window !== 'undefined' && RECAPTCHA_SITE_KEY && process.env.NEXT_PUBLIC_USE_EMULATORS !== '1') {
+  initializeAppCheck(app, { provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY), isTokenAutoRefreshEnabled: true });
+}
 
 // Optional fields are left undefined all over the app; Firestore would reject them otherwise.
 export const db: Firestore = fresh

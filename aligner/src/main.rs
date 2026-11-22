@@ -5,17 +5,20 @@
 //!
 //! Settings (environment variables):
 //!   WHISPER_MODEL    path to a ggml model        (default: models/ggml-small.bin)
-//!   ALIGNER_PORT     port on 127.0.0.1            (default: 8787)
+//!   ALIGNER_HOST     address to listen on         (default: 127.0.0.1; a server or container: 0.0.0.0)
+//!   ALIGNER_PORT     port                         (default: 8787)
 //!   ALIGNER_ORIGINS  allowed site origins, comma-separated
 //!   ALIGNER_PUBLIC   0 = only this computer; otherwise a Cloudflare tunnel makes the service
 //!                    reachable from other devices and its address is published to Firestore
+//!   ALIGNER_REQUIRE_AUTH  1 = every request needs a Firebase ID token. Always on when ALIGNER_HOST
+//!                    is not a loopback address; otherwise only tunnelled requests need one
 
 mod align;
 mod audio;
 mod transcribe;
 mod tunnel;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -47,6 +50,8 @@ struct AppState {
     /// Bounds queued requests before reading large multipart uploads into memory.
     waiting: AtomicUsize,
     http: reqwest::Client,
+    /// Every request must carry a Firebase ID token (see `auth_required`).
+    require_auth: bool,
 }
 
 struct QueueGuard<'a>(&'a AtomicUsize);
@@ -95,6 +100,8 @@ async fn main() -> anyhow::Result<()> {
     }
     let ctx = WhisperContext::new_with_params(&model, cparams)
         .map_err(|e| anyhow::anyhow!("cannot load model: {e:?}"))?;
+    let host = listen_host(std::env::var("ALIGNER_HOST").ok().as_deref());
+    let require_auth = !host.is_loopback() || std::env::var("ALIGNER_REQUIRE_AUTH").map(|v| v == "1").unwrap_or(false);
     let http = reqwest::Client::new();
     let state = Arc::new(AppState {
         ctx,
@@ -102,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
         busy: Semaphore::new(1),
         waiting: AtomicUsize::new(0),
         http: http.clone(),
+        require_auth,
     });
 
     let mut origins: Vec<String> = DEFAULT_ORIGINS.split(',').map(String::from).collect();
@@ -125,8 +133,11 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     let port: u16 = std::env::var("ALIGNER_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8787);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::new(host, port);
     tracing::info!("aligner ready on http://{addr}");
+    if require_auth {
+        tracing::info!("every request needs a signed-in site account (Firebase ID token)");
+    }
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     let mut tunnel_child = None;
@@ -206,13 +217,27 @@ fn is_tunneled_request(headers: &HeaderMap) -> bool {
     headers.contains_key("cf-connecting-ip") || headers.contains_key("cf-ray") || headers.contains_key("x-forwarded-for")
 }
 
+/// The address to listen on: ALIGNER_HOST when it is a valid IP, otherwise 127.0.0.1 (this computer only).
+fn listen_host(value: Option<&str>) -> IpAddr {
+    value
+        .and_then(|v| v.trim().parse::<IpAddr>().ok())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
+/// A request needs a Firebase ID token when the service is open beyond this computer
+/// (`require_all`) or when it came through the Cloudflare tunnel.
+fn auth_required(require_all: bool, headers: &HeaderMap) -> bool {
+    require_all || is_tunneled_request(headers)
+}
+
 async fn align_handler(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
     mut form: Multipart,
 ) -> Result<Json<AlignResponse>, ApiError> {
-    // Requests arriving over the public Cloudflare tunnel must carry a valid Firebase ID token.
-    if is_tunneled_request(&headers) {
+    // Requests from beyond this computer (a server, or the public Cloudflare tunnel) must carry a valid
+    // Firebase ID token.
+    if auth_required(st.require_auth, &headers) {
         let bearer = headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
@@ -323,7 +348,29 @@ async fn align_handler(
 
 #[cfg(test)]
 mod tests {
-    use super::origin_allowed;
+    use super::{auth_required, listen_host, origin_allowed};
+    use axum::http::{HeaderMap, HeaderValue};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn host_defaults_to_this_computer() {
+        assert_eq!(listen_host(None), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(listen_host(Some("not an ip")), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(listen_host(Some(" 0.0.0.0 ")), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert!(!listen_host(Some("0.0.0.0")).is_loopback());
+        assert!(listen_host(Some("::1")).is_loopback());
+    }
+
+    #[test]
+    fn token_needed_beyond_this_computer() {
+        let local = HeaderMap::new();
+        let mut tunnelled = HeaderMap::new();
+        tunnelled.insert("cf-connecting-ip", HeaderValue::from_static("203.0.113.5"));
+        assert!(!auth_required(false, &local));
+        assert!(auth_required(false, &tunnelled));
+        assert!(auth_required(true, &local));
+        assert!(auth_required(true, &tunnelled));
+    }
 
     #[test]
     fn origins() {

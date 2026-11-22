@@ -10,6 +10,8 @@ import AuthPrompt from '@/components/ui/AuthPrompt';
 import DataProvider from '@/components/DataProvider';
 import { DownloadsProvider } from '@/context/DownloadsContext';
 import DownloadsPanel from '@/components/downloads/DownloadsPanel';
+import { Analytics } from '@vercel/analytics/next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import VerifyEmailBanner from '@/components/layout/VerifyEmailBanner';
 import ConsentBanner from '@/components/layout/ConsentBanner';
 import { SITE_URL } from '@/lib/server-meta';
@@ -66,6 +68,11 @@ export default function RootLayout({
               </Suspense>
               <AuthPrompt />
               <DownloadsPanel />
+              {/* Anonymous visit and speed stats (no cookies); both read the URL, hence the Suspense boundary. */}
+              <Suspense fallback={null}>
+                <Analytics />
+                <SpeedInsights />
+              </Suspense>
             </DownloadsProvider>
           </AuthProvider>
         </DataProvider>

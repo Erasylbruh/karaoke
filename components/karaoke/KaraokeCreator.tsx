@@ -7,7 +7,7 @@ import { Karaoke, LyricLine, Visibility } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
 import { saveKaraoke, updateKaraoke, getKaraokeById, fetchKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid, getGenres, MAX_GENRES } from '@/lib/storage';
 import { pluralRu, safeMediaUrl } from '@/lib/format';
-import { isBlobRef, putBlob, resolveBlobUrl } from '@/lib/blob-store';
+import { isBlobRef, putBlob, resolveBlobUrl, StorageRefusedError } from '@/lib/blob-store';
 import {
   DEFAULT_FONTS,
   POPULAR_FONTS,
@@ -241,8 +241,8 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       setAudioName(file.name);
       setDemoAudio(false);
       if (!title) setTitle(file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '));
-    } catch {
-      showToast('Не удалось сохранить файл. Проверьте свободное место в браузере');
+    } catch (e) {
+      showToast(e instanceof StorageRefusedError ? e.message : 'Не удалось сохранить файл. Проверьте свободное место в браузере');
     } finally {
       setBusy(false);
       setUploadShare(null);
@@ -394,8 +394,8 @@ export default function KaraokeCreator({ editId }: { editId?: string } = {}) {
       setFont(family);
       setFontFile(ref);
       showToast('Шрифт загружен');
-    } catch {
-      showToast('Не удалось прочитать шрифт — файл повреждён');
+    } catch (e) {
+      showToast(e instanceof StorageRefusedError ? e.message : 'Не удалось прочитать шрифт — файл повреждён');
     }
   };
 

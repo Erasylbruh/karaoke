@@ -238,6 +238,9 @@ export async function putBlob(file: Blob, folder = 'uploads', onProgress?: Uploa
     try {
       return await uploadCloudBlob(file, folder, onProgress);
     } catch (e) {
+      // A final refusal (ban, unconfirmed email, account quota, format) is shown to the person as is;
+      // keeping the file in this browser would only hide it.
+      if (e instanceof StorageRefusedError && [403, 413, 415].includes(e.status)) throw e;
       console.warn('[storage] upload failed, keeping the file in this browser only:', e);
     }
   }

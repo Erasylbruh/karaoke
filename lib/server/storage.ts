@@ -194,6 +194,22 @@ export async function signUpload(request: Request): Promise<Response> {
   const ban = banError(profile);
   if (ban) return fail(ban, 403);
 
+  // Per-account quota, so one account cannot fill the whole bucket. If the listing fails, the upload is
+  // allowed: a storage hiccup must not block everyone.
+  if (!isAdminProfile(profile, account.uid)) {
+    const files = await listOwnFiles(key, account.uid);
+    if (files) {
+      const used = files.reduce((sum, f) => sum + f.size, 0);
+      const quota = userQuotaBytes();
+      if (used + size > quota) {
+        return fail(
+          `Достигнут лимит хранилища для аккаунта (${Math.round(quota / 1024 / 1024)} МБ). Удалите старые треки, чтобы загрузить новые файлы.`,
+          413
+        );
+      }
+    }
+  }
+
   const objectPath = `${folder}/${account.uid}/${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
   let res: Response;
   try {
@@ -238,11 +254,17 @@ async function removePaths(key: string, paths: string[]): Promise<boolean> {
 
 /** Every file in the caller's own folders (`{folder}/{uid}/…`), or null when listing failed. */
 async function listOwnObjects(key: string, uid: string): Promise<string[] | null> {
-  const paths: string[] = [];
+  const files = await listOwnFiles(key, uid);
+  return files ? files.map((f) => f.path) : null;
+}
+
+/** Same as listOwnObjects, with each file's size in bytes (metadata.size). */
+async function listOwnFiles(key: string, uid: string): Promise<Array<{ path: string; size: number }> | null> {
+  const files: Array<{ path: string; size: number }> = [];
   for (const folder of UPLOAD_FOLDERS) {
     const prefix = `${folder}/${uid}`;
     for (let offset = 0; offset < 10000; offset += 100) {
-      let items: Array<{ name?: string; id?: string | null }> | null;
+      let items: Array<{ name?: string; id?: string | null; metadata?: { size?: unknown } | null }> | null;
       try {
         const res = await fetch(`${SUPABASE_URL}/storage/v1/object/list/${SUPABASE_BUCKET}`, {
           method: 'POST',
@@ -256,16 +278,24 @@ async function listOwnObjects(key: string, uid: string): Promise<string[] | null
         return null;
       }
       if (!Array.isArray(items)) return null;
-      // Folders come back with id null; only files are deleted, and only valid {folder}/{uid}/{name} paths.
+      // Folders come back with id null; only files count, and only valid {folder}/{uid}/{name} paths.
       for (const it of items) {
         const path = `${prefix}/${it.name}`;
-        if (it.id && it.name && OBJECT_PATH.test(path)) paths.push(path);
+        if (!it.id || !it.name || !OBJECT_PATH.test(path)) continue;
+        const size = Number(it.metadata?.size);
+        files.push({ path, size: Number.isFinite(size) && size > 0 ? size : 0 });
       }
       if (items.length < 100) break;
     }
   }
-  return paths;
+  return files;
 }
+
+/** Storage each account may fill, in MB (STORAGE_USER_QUOTA_MB, default 300). Admins are not limited. */
+const userQuotaBytes = () => {
+  const mb = Number(process.env.STORAGE_USER_QUOTA_MB);
+  return (Number.isFinite(mb) && mb > 0 ? mb : 300) * 1024 * 1024;
+};
 
 /**
  * POST /api/storage/delete

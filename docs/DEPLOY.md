@@ -49,6 +49,10 @@
    | `SUPABASE_SERVICE_ROLE_KEY` | **Секретный** ключ Supabase. Без приставки `NEXT_PUBLIC_`, иначе он попадёт в браузер |
    | `NEXT_PUBLIC_CONTACT_EMAIL`, `NEXT_PUBLIC_OPERATOR_NAME` | Необязательно: контакт и владелец для документов сайта, по умолчанию из `lib/legal.ts` |
    | `NEXT_PUBLIC_ALIGNER_URL` | Необязательно: постоянный адрес сервиса авто-тайминга, когда он переедет на сервер (CSP подхватит его сам) |
+   | `STORAGE_USER_QUOTA_MB` | Необязательно: сколько МБ файлов может хранить один аккаунт, по умолчанию 300. Админов лимит не касается |
+   | `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` | Необязательно: ключ сайта reCAPTCHA v3 для App Check (см. FIREBASE.md, раздел «App Check») |
+
+   Статистика посещений: Vercel → проект → **Analytics → Enable** и **Speed Insights → Enable**. Код уже подключён (`app/layout.tsx`); пока в Vercel статистика не включена, она просто не собирается.
 
 4. Deploy. После каждого push в `main` сайт пересобирается сам, поэтому изменения сначала проверяйте в отдельной ветке (Vercel даёт для неё preview-адрес).
 

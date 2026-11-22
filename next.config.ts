@@ -11,9 +11,15 @@ const alignerOrigin = (() => {
   }
 })();
 
+/** App Check with reCAPTCHA v3 (lib/firebase.ts) is on only when this key is set; its script and frame need CSP room. */
+const recaptcha = !!process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
+
 const cspDirectives = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}${
+    recaptcha ? " https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/" : ""
+  }`,
+  ...(recaptcha ? ["frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/"] : []),
   "worker-src 'self' blob:",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: blob: https://fonts.gstatic.com https://*.supabase.co",

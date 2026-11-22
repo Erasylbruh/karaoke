@@ -173,6 +173,37 @@ test('delete: admins may delete any file; non-admins may not', async () => {
   assert.equal(calls.filter((c) => c.init.method === 'DELETE').length, 0);
 });
 
+test('sign: per-account quota (300 MB) refuses an upload that would go over it', async () => {
+  const MB = 1024 * 1024;
+  listing = {
+    'audio/uidA': [{ name: 'a', id: 'f1', metadata: { size: 250 * MB } }, { name: 'folder', id: null, metadata: null }],
+    'covers/uidA': [{ name: 'c', id: 'f2', metadata: { size: 45 * MB } }],
+  };
+  const over = await signUpload(req({ ...good, size: 9 * MB }, 'good'));
+  assert.equal(over.status, 413);
+  assert.match((await over.json()).error, /лимит хранилища/);
+  assert.equal(calls.filter((c) => c.url.includes('/object/upload/sign/')).length, 0);
+  const under = await signUpload(req({ ...good, size: 4 * MB }, 'good'));
+  assert.equal(under.status, 200);
+  process.env.STORAGE_USER_QUOTA_MB = '1000';
+  assert.equal((await signUpload(req({ ...good, size: 9 * MB }, 'good'))).status, 200);
+  delete process.env.STORAGE_USER_QUOTA_MB;
+});
+
+test('sign: admins are not limited, and a failed listing does not block the upload', async () => {
+  const MB = 1024 * 1024;
+  listing = { 'audio/uidAdmin': [{ name: 'big', id: 'f1', metadata: { size: 900 * MB } }] };
+  assert.equal((await signUpload(req({ ...good, size: 9 * MB }, 'admin'))).status, 200);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) =>
+    String(url).includes('/object/list/') ? new Response('boom', { status: 500 }) : origFetch(url, init);
+  try {
+    assert.equal((await signUpload(req({ ...good, size: 9 * MB }, 'good'))).status, 200);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('delete: an empty list is the availability check (200 with the key, 501 without), without touching anything', async () => {
   assert.equal((await deleteObjects(req({ urls: [] }))).status, 200);
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
