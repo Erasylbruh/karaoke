@@ -7,7 +7,6 @@ import { Karaoke, LyricLine, LyricWord, Visibility } from '@/lib/types';
 import { useAuth } from '@/context/AuthContext';
 import { saveKaraoke, updateKaraoke, getKaraokeById, fetchKaraokeById, getKaraokes, artistSlug, initialRecommendationScore, uid, getGenres, MAX_GENRES } from '@/lib/storage';
 import { pluralRu, safeMediaUrl } from '@/lib/format';
-import { contrastRatio } from '@/lib/karaoke-fill';
 import { isBlobRef, putBlob, resolveBlobUrl } from '@/lib/blob-store';
 import {
   DEFAULT_FONTS,
@@ -23,6 +22,7 @@ import {
 import { alignLyrics, isAlignerOnline, localAccessState, LOCAL_ACCESS_HINT } from '@/lib/alignment';
 import { useDownloads } from '@/context/DownloadsContext';
 import { compressAudio, needsCompression } from '@/lib/audio-compress';
+import { contrastRatio } from '@/lib/karaoke-fill';
 import CoverCropModal from '@/components/karaoke/CoverCropModal';
 import { cropToBlob, looksLikeImage, openImageFile, saveCover, type CropRect } from '@/lib/cover';
 
