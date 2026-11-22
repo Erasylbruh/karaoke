@@ -24,7 +24,6 @@ import { useAuth } from '@/context/AuthContext';
 import { useDataVersion } from '@/components/DataProvider';
 import KaraokeTile from '@/components/karaoke/KaraokeTile';
 import Tabs from '@/components/ui/Tabs';
-import Tutorial from '@/components/ui/Tutorial';
 
 type Tab = 'karaoke' | 'playlists' | 'about';
 
@@ -81,15 +80,6 @@ export default function PublicProfilePage() {
 
   return (
     <div className="pg">
-      <Tutorial
-        page="profile"
-        steps={[
-          { title: 'Профиль автора', text: 'Здесь опубликованные караоке, плейлисты и информация об авторе.' },
-          { title: 'Подписка', text: 'Подпишитесь на автора, чтобы он попал в ваши слушатели. Число слушателей видно под ником.' },
-          { title: 'Плейлисты', text: 'В плейлисте можно собрать как свои, так и чужие караоке. Добавлять треки можно прямо из плеера.' },
-        ]}
-      />
-
       <div className="ph">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={avatarSrc || '/brand/karaokecraft-app-icon.svg'} alt="" className="av lg" />

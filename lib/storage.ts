@@ -94,12 +94,12 @@ function normalizeKaraoke(k: Karaoke): Karaoke {
   };
 }
 
-/** Recommendation score (0-100) shown to authors as a 1-10 visibility grade. */
-export function visibilityRating(score: number): { value: number; label: string; kind: 'ok' | 'wn' | 'dg' } {
+/** Recommendation score (0-100) shown to authors as a friendly promotion stage. */
+export function visibilityRating(score: number): { value: number; label: string; kind: 'ok' | 'ac' | 'wn' } {
   const value = Math.max(1, Math.min(10, Math.round(score / 10)));
-  if (value >= 7) return { value, label: 'Отличная', kind: 'ok' };
-  if (value >= 4) return { value, label: 'Хорошая', kind: 'wn' };
-  return { value, label: 'Плохая', kind: 'dg' };
+  if (score >= RECOMMEND_THRESHOLD) return { value, label: 'В рекомендациях', kind: 'ok' };
+  if (score >= 30) return { value, label: 'Набирает слушателей', kind: 'ac' };
+  return { value, label: 'Новый релиз', kind: 'wn' };
 }
 
 // ---------------- KARAOKES ----------------

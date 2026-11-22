@@ -4,9 +4,65 @@ import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Karaoke } from '@/lib/types';
 import { cssUrl, pluralRu, safeColor } from '@/lib/format';
+import { lineFillShare } from '@/lib/karaoke-fill';
 
 const fmt = (n: number) =>
   n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '').replace('.', ',') + ' тыс.' : '' + n;
+
+/**
+ * Touch screens have no hover, so one tile plays its lyric preview by itself: the tile in the
+ * middle half of the screen whose centre is nearest the screen centre. A single choice for all
+ * tiles, so a row of tiles side by side (the recommended strip, the 2-column grid) never plays
+ * two at once. Scroll events are listened to in the capture phase to catch horizontal strips.
+ */
+const touchTiles = new Map<HTMLElement, (playing: boolean) => void>();
+let touchCurrent: HTMLElement | null = null;
+let touchFrame = 0;
+
+function pickTouchTile() {
+  touchFrame = 0;
+  const cx = window.innerWidth / 2;
+  const cy = window.innerHeight / 2;
+  let best: HTMLElement | null = null;
+  let bestDist = Infinity;
+  for (const el of touchTiles.keys()) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom < window.innerHeight * 0.25 || r.top > window.innerHeight * 0.75) continue;
+    if (r.right <= 0 || r.left >= window.innerWidth) continue;
+    const d = Math.hypot((r.left + r.right) / 2 - cx, (r.top + r.bottom) / 2 - cy);
+    if (d < bestDist) {
+      bestDist = d;
+      best = el;
+    }
+  }
+  if (best === touchCurrent) return;
+  if (touchCurrent) touchTiles.get(touchCurrent)?.(false);
+  touchCurrent = best;
+  if (best) touchTiles.get(best)?.(true);
+}
+
+const scheduleTouchPick = () => {
+  if (!touchFrame) touchFrame = requestAnimationFrame(pickTouchTile);
+};
+
+function registerTouchTile(el: HTMLElement, setPlaying: (playing: boolean) => void) {
+  touchTiles.set(el, setPlaying);
+  if (touchTiles.size === 1) {
+    window.addEventListener('scroll', scheduleTouchPick, { capture: true, passive: true });
+    window.addEventListener('resize', scheduleTouchPick);
+  }
+  scheduleTouchPick();
+  return () => {
+    touchTiles.delete(el);
+    if (touchCurrent === el) touchCurrent = null;
+    if (touchTiles.size === 0) {
+      window.removeEventListener('scroll', scheduleTouchPick, { capture: true });
+      window.removeEventListener('resize', scheduleTouchPick);
+    } else {
+      scheduleTouchPick();
+    }
+  };
+}
 
 const HeartIcon = () => (
   <svg className="ic" viewBox="0 0 24 24">
@@ -53,9 +109,7 @@ function LyricsPreview({ karaoke, active }: { karaoke: Karaoke; active: boolean 
     if (l.time <= t) idx = i;
   });
   const cur = lines[idx];
-  const end = cur.end ?? lines[idx + 1]?.time ?? cur.time + 4;
-  const pct =
-    karaoke.style?.fillAnimation === false ? 100 : Math.min(100, Math.max(0, ((t - cur.time) / Math.max(0.1, end - cur.time)) * 100));
+  const pct = lineFillShare(cur, lines[idx + 1]?.time, t, cur.time + 4, karaoke.style?.fillAnimation !== false) * 100;
   const visible = lines.slice(Math.max(0, idx - 1), idx + 2);
 
   return (
@@ -90,15 +144,11 @@ export default function KaraokeTile({
   const [inView, setInView] = useState(false);
   const ref = useRef<HTMLAnchorElement | null>(null);
 
-  // Touch screens have no hover: animate the tile that crosses the middle of the viewport.
+  // Touch screens have no hover: the tile nearest the screen centre plays (see pickTouchTile).
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof window === 'undefined' || !window.matchMedia('(hover: none)').matches) return;
-    const io = new IntersectionObserver(([e]) => setInView(e.isIntersecting), {
-      rootMargin: '-42% 0px -42% 0px',
-    });
-    io.observe(el);
-    return () => io.disconnect();
+    return registerTouchTile(el, setInView);
   }, []);
 
   const bg = safeColor(karaoke.style?.backgroundColor, '#1d1b3a');
@@ -124,7 +174,7 @@ export default function KaraokeTile({
           }}
         >
           {!coverBg && karaoke.title[0]}
-          {!coverBg && <LyricsPreview karaoke={karaoke} active={playing} />}
+          <LyricsPreview karaoke={karaoke} active={playing} />
         </div>
         {badge && <span className="ft2">{badge}</span>}
       </div>

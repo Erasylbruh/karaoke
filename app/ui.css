@@ -591,3 +591,81 @@ button.chip:hover { border-color: var(--mu); }
 .site-ft-list a:hover { color: var(--ac); }
 .site-ft-bottom { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--ln); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--mu); }
 @media (max-width: 720px) { .site-ft-grid { grid-template-columns: 1fr; gap: 22px; } }
+
+/* Home hero enhancements, cover hover scrim & horizontal genre strip */
+.cv .lp { color: #f4f4f5; }
+.cv.img .lp {
+  background: rgba(9, 9, 11, 0.72);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+.hero-sub { color: var(--mu); font-size: clamp(14px, 1.35vw, 16px); line-height: 1.5; margin: 0 0 18px; max-width: 50ch; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.hero-actions .sr { flex: 1 1 260px; margin: 0; }
+.hero-cta { min-height: 48px; padding: 0 20px; border-radius: 999px; white-space: nowrap; }
+.tk { transition: background-color 0.25s ease, color 0.25s ease; }
+.tk-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tk-pill { font-size: 12px; font-weight: 600; letter-spacing: 0.03em; }
+.tk-scenes { display: inline-flex; gap: 4px; padding: 3px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); }
+.tk-scenes button { background: transparent; border: 0; color: rgba(255, 255, 255, 0.65); padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+.tk-scenes button:hover { color: #fff; }
+.tk-scenes button.on { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.genre-strip { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 4px clamp(16px, 4vw, 40px) 8px; -webkit-overflow-scrolling: touch; }
+.genre-strip::-webkit-scrollbar { display: none; }
+.genre-strip .ch { flex: none; white-space: nowrap; }
+
+/* Player: ambient cover aura, vocal cue dots, and 30-second clip range picker */
+#player { position: relative; isolation: isolate; overflow: hidden; }
+.player-aura {
+  position: absolute; inset: -16%; background-size: cover; background-position: center;
+  filter: blur(72px) saturate(1.25); opacity: 0.26; z-index: -1; pointer-events: none; transform: translateZ(0);
+}
+.cue-dots { display: inline-flex; gap: 8px; align-items: center; margin: 4px 0 8px; height: 14px; }
+.cue-dots i {
+  display: block; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--ptx, #f4f4f5); opacity: 0.22; transform: scale(0.85);
+  transition: opacity 0.18s ease, transform 0.18s ease, background-color 0.18s ease;
+}
+.cue-dots i.lit {
+  background: var(--pact, #ffb547); opacity: 1; transform: scale(1.12);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--pact, #ffb547) 55%, transparent);
+}
+.dl-clip { display: flex; flex-direction: column; gap: 8px; padding: 6px 4px 10px; margin-bottom: 4px; border-bottom: 1px solid #27272a; }
+.dl-clip-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.dl-list .dl-clip-tabs button {
+  display: inline-flex; flex-direction: row; align-items: center; justify-content: center;
+  padding: 6px 8px; border: 1px solid #3f3f46; border-radius: 9px;
+  font-size: 12px; font-weight: 600; color: #d4d4d8; background: transparent; cursor: pointer;
+}
+.dl-list .dl-clip-tabs button.on { border-color: var(--ac); background: color-mix(in srgb, var(--ac) 14%, transparent); color: #fff; }
+.dl-clip-range { display: flex; flex-direction: column; gap: 4px; padding: 0 4px; font-size: 12px; color: #a1a1aa; }
+.dl-clip-range b { color: #f4f4f5; font-size: 12px; font-variant-numeric: tabular-nums; }
+.dl-clip-range input[type="range"] { width: 100%; accent-color: var(--ac); cursor: pointer; margin: 0; }
+
+/* Editor: live Spacebar tap-to-sync bar & 1-click colour scene presets */
+.tap-bar {
+  display: flex; flex-direction: column; gap: 10px;
+  border-color: color-mix(in srgb, var(--ac) 55%, var(--ln));
+  background: color-mix(in srgb, var(--ac) 6%, var(--s1));
+}
+.tap-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tap-hit {
+  width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 14px 16px; border-radius: 14px; text-align: left;
+}
+.tap-hit span { font-size: 12px; font-weight: 500; opacity: 0.85; }
+.tap-hit strong { font-size: 16px; font-weight: 700; line-height: 1.25; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 8px; }
+.theme-card {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12); cursor: pointer; text-align: left;
+  transition: transform 0.12s ease, border-color 0.15s ease;
+}
+.theme-card:hover { transform: translateY(-1px); border-color: rgba(255, 255, 255, 0.35); }
+.theme-card[aria-pressed="true"] { border-color: var(--ac); box-shadow: 0 0 0 1px var(--ac); }
+.theme-sw { font: 800 18px/1 var(--fd); flex: none; }
+.theme-card b { font-size: 13px; font-weight: 600; line-height: 1.2; }
+
+/* Hero without a subtitle: the heading keeps some air above the search row. */
+.hero-copy h1 { margin-bottom: 24px; }
+@media (max-width: 600px) { .hero-copy h1 { margin-bottom: 16px; } }

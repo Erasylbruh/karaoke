@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, Suspense } from 'react';
 import Link from 'next/link';
 import { ChevronDown, ChevronLeft, Download, Ellipsis, Flag, ListCheck, ListPlus, Maximize2, MessageSquare, Minimize2, Pause, Play, X } from 'lucide-react';
 import { useParams } from 'next/navigation';
-import { Karaoke } from '@/lib/types';
+import { Karaoke, LyricLine } from '@/lib/types';
 import {
   getKaraokeById,
   fetchKaraokeById,
@@ -14,8 +14,6 @@ import {
   registerInteraction,
   registerListen,
   LISTEN_SHARE,
-  registerGuestPlay,
-  guestPlaysLeft,
   getGuestId,
   getAuthor,
   artistSlug,
@@ -23,7 +21,6 @@ import {
   toggleFollow,
   getPlaylists,
   getComments,
-  GUEST_PLAY_LIMIT,
   updateKaraoke,
 } from '@/lib/storage';
 import { useAuth } from '@/context/AuthContext';
@@ -31,20 +28,42 @@ import { synthPlayer } from '@/lib/audio-synthesizer';
 import { isBlobRef, resolveBlobUrl, uploadLocalBlob } from '@/lib/blob-store';
 import { ensureStyleFont, fontCss } from '@/lib/fonts';
 import { cssUrl, safeColor, safeDecode } from '@/lib/format';
+import { lineFillShare, suggestClipStart, vocalCueDots } from '@/lib/karaoke-fill';
 import { useDownloads } from '@/context/DownloadsContext';
 import { QUALITY_OPTIONS, getPreferredQuality, setPreferredQuality } from '@/lib/video-render';
-import type { ExportFormat, VideoQuality } from '@/lib/video-render';
+import type { ExportFormat, VideoClipRange, VideoQuality } from '@/lib/video-render';
 import CommentsSection from '@/components/karaoke/CommentsSection';
 import PlaylistPicker from '@/components/karaoke/PlaylistPicker';
 import ProjectReportDialog from '@/components/karaoke/ProjectReportDialog';
-import Tutorial from '@/components/ui/Tutorial';
 import { useDataVersion } from '@/components/DataProvider';
 import { canReportProject } from '@/lib/project-moderation';
 
-/** «Скачать ▾»: pick the video format; the video is made in the background (see DownloadsContext). */
-function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: VideoQuality) => void; karaokeId: string }) {
+const fmt = (n: number) =>
+  n >= 1000
+    ? (n / 1000).toFixed(1).replace('.0', '').replace('.', ',') + ' тыс.'
+    : '' + n;
+
+const mm = (s: number) =>
+  Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+
+/** «Скачать ▾»: pick the video format and full-song vs 30s chorus clip; rendered in the background. */
+function DownloadMenu({
+  onPick,
+  karaokeId,
+  duration,
+  lyrics,
+}: {
+  onPick: (f: ExportFormat, q: VideoQuality, clip?: VideoClipRange) => void;
+  karaokeId: string;
+  duration: number;
+  lyrics: LyricLine[];
+}) {
   const { jobs, openPanel } = useDownloads();
   const [quality, setQuality] = useState<VideoQuality>('720p');
+  const canClip = duration > 35;
+  const maxStart = Math.max(0, Math.floor(duration - 30));
+  const [clipMode, setClipMode] = useState(false);
+  const [clipStart, setClipStart] = useState(0);
   const mine = jobs.find((j) => j.karaoke.id === karaokeId && (j.status === 'rendering' || j.status === 'queued'));
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<React.CSSProperties | undefined>(undefined);
@@ -52,16 +71,19 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: Vide
   // The info column scrolls, so the list is positioned against the viewport instead of being clipped by it.
   const toggle = () => {
     const r = ref.current?.getBoundingClientRect();
-    // Opens upward when there is not enough room below the button (the list is ~390 px tall).
+    // Opens upward when there is not enough room below the button.
     const below = r ? window.innerHeight - r.bottom : 0;
     setPos(
       r && window.innerWidth > 820
-        ? below > 400
-          ? { position: 'fixed', top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 250) }
-          : { position: 'fixed', bottom: window.innerHeight - r.top + 6, left: Math.min(r.left, window.innerWidth - 250), top: 'auto' }
+        ? below > 460
+          ? { position: 'fixed', top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 260) }
+          : { position: 'fixed', bottom: window.innerHeight - r.top + 6, left: Math.min(r.left, window.innerWidth - 260), top: 'auto' }
         : undefined
     );
-    if (!open) setQuality(getPreferredQuality());
+    if (!open) {
+      setQuality(getPreferredQuality());
+      if (!clipMode) setClipStart(suggestClipStart(lyrics, duration, 30));
+    }
     setOpen(!open);
   };
   useEffect(() => {
@@ -76,8 +98,13 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: Vide
     };
   }, [open]);
   const pick = (f: ExportFormat) => {
+    const startSec = Math.min(clipStart, maxStart);
+    const clip: VideoClipRange | undefined =
+      canClip && clipMode
+        ? { startSec, durationSec: Math.min(30, Math.max(5, duration - startSec)) }
+        : undefined;
     setOpen(false);
-    onPick(f, quality);
+    onPick(f, quality, clip);
   };
   return (
     <div className="dl-menu" ref={ref}>
@@ -106,6 +133,45 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: Vide
               </button>
             ))}
           </div>
+          {canClip && (
+            <div className="dl-clip">
+              <div className="dl-clip-tabs" role="radiogroup" aria-label="Длительность видео">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!clipMode}
+                  className={!clipMode ? 'on' : ''}
+                  onClick={() => setClipMode(false)}
+                >
+                  Вся песня
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={clipMode}
+                  className={clipMode ? 'on' : ''}
+                  onClick={() => setClipMode(true)}
+                >
+                  Отрывок 30 с
+                </button>
+              </div>
+              {clipMode && (
+                <label className="dl-clip-range">
+                  <span>
+                    Фрагмент: <b>{mm(Math.min(clipStart, maxStart))} – {mm(Math.min(duration, Math.min(clipStart, maxStart) + 30))}</b>
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={maxStart}
+                    step={1}
+                    value={Math.min(clipStart, maxStart)}
+                    onChange={(e) => setClipStart(Number(e.target.value))}
+                  />
+                </label>
+              )}
+            </div>
+          )}
           <button role="menuitem" onClick={() => pick('reel')}>
             <b>Вертикальное 9:16</b>
             <span>Reels, Shorts, TikTok</span>
@@ -134,14 +200,6 @@ function DownloadMenu({ onPick, karaokeId }: { onPick: (f: ExportFormat, q: Vide
   );
 }
 
-const fmt = (n: number) =>
-  n >= 1000
-    ? (n / 1000).toFixed(1).replace('.0', '').replace('.', ',') + ' тыс.'
-    : '' + n;
-
-const mm = (s: number) =>
-  Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
-
 function KaraokePlayerContent() {
   const params = useParams();
   const { user, openAuthPrompt } = useAuth();
@@ -166,7 +224,6 @@ function KaraokePlayerContent() {
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled;
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const version = useDataVersion(); // playlist state, author tracks and review count stay live
-  const [guestLeft, setGuestLeft] = useState(GUEST_PLAY_LIMIT);
 
   const actionsRef = useRef<HTMLDialogElement>(null);
   const reviewsRef = useRef<HTMLDialogElement>(null);
@@ -213,7 +270,6 @@ function KaraokePlayerContent() {
       setLikesCount(item.likesCount);
       setIsLiked(hasUserLiked(item.id, user?.id));
       setFollowing(isFollowing(user?.id, item.authorId));
-      setGuestLeft(guestPlaysLeft(item.id));
       ensureStyleFont(item.style);
       const resolved = await resolveBlobUrl(item.audioUrl);
       if (alive) setAudioSrc(resolved);
@@ -231,7 +287,7 @@ function KaraokePlayerContent() {
     listenCountedRef.current = false;
   }, [id]);
 
-  // Start / stop sound (author's uploaded audio, or the built-in synth preset as a fallback)
+  // Start / stop sound (author's uploaded audio, or built-in synth only for explicit preset demos without audioUrl)
   useEffect(() => {
     if (!karaoke) return;
     const audio = audioRef.current;
@@ -239,7 +295,7 @@ function KaraokePlayerContent() {
       if (hasAudio && audio) {
         audio.currentTime = timeRef.current;
         void audio.play().catch(() => setIsPlaying(false));
-      } else {
+      } else if (!karaoke.audioUrl) {
         synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', timeRef.current);
       }
     } else {
@@ -251,7 +307,7 @@ function KaraokePlayerContent() {
       audio?.pause();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, karaoke?.audioPreset, hasAudio]);
+  }, [isPlaying, karaoke?.audioPreset, karaoke?.audioUrl, hasAudio]);
 
   // Clock: follows the audio element when there is one, otherwise a wall clock.
   useEffect(() => {
@@ -326,11 +382,8 @@ function KaraokePlayerContent() {
 
     if (activeIdx >= 0 && linesRef.current[activeIdx]) {
       const line = lyrics[activeIdx];
-      const end = line.end ?? lyrics[activeIdx + 1]?.time ?? duration;
       const progress =
-        karaoke.style?.fillAnimation === false
-          ? 100
-          : Math.min(100, Math.max(0, ((currentTime - line.time) / Math.max(0.1, end - line.time)) * 100));
+        lineFillShare(line, lyrics[activeIdx + 1]?.time, currentTime, duration, karaoke.style?.fillAnimation !== false) * 100;
       const span = linesRef.current[activeIdx]?.querySelector('span');
       if (span) (span as HTMLElement).style.setProperty('--w', `${progress}%`);
     }
@@ -443,17 +496,8 @@ function KaraokePlayerContent() {
     return false;
   };
 
-  /** Guests get GUEST_PLAY_LIMIT free karaokes; after that registration is required. */
-  const canStartPlayback = () => {
-    if (!karaoke) return false;
-    if (user) return true;
-    if (registerGuestPlay(karaoke.id)) {
-      setGuestLeft(guestPlaysLeft(karaoke.id));
-      return true;
-    }
-    openAuthPrompt(`Вы уже послушали ${GUEST_PLAY_LIMIT} караоке без регистрации. Зарегистрируйтесь, чтобы слушать дальше.`);
-    return false;
-  };
+  /** Anyone (guests included) can listen freely; account is only prompted for likes, playlists, and video export. */
+  const canStartPlayback = () => !!karaoke;
 
   const startPlayback = () => {
     if (!canStartPlayback() || !karaoke) return false;
@@ -475,7 +519,7 @@ function KaraokePlayerContent() {
     const clamped = Math.max(0, Math.min(duration, time));
     setTime(clamped);
     if (audioRef.current && hasAudio) audioRef.current.currentTime = clamped;
-    else if (isPlaying && karaoke) synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', clamped);
+    else if (isPlaying && karaoke && !karaoke.audioUrl) synthPlayer?.playPreset(karaoke.audioPreset || 'synthwave', clamped);
   };
 
   // Space toggles playback, arrows seek by 5 s (ignored while typing or inside a popup).
@@ -510,9 +554,9 @@ function KaraokePlayerContent() {
     showToast(res.isLiked ? 'Добавлено в понравившиеся' : 'Удалено из понравившихся');
   };
 
-  const handleOpenDownload = (format: ExportFormat, quality: VideoQuality) => {
+  const handleOpenDownload = (format: ExportFormat, quality: VideoQuality, clip?: VideoClipRange) => {
     if (!requireAccount('Скачивать видео могут только зарегистрированные пользователи.')) return;
-    if (karaoke) startDownload(karaoke, format, quality);
+    if (karaoke) startDownload(karaoke, format, quality, clip);
   };
 
   const handleShare = () => {
@@ -563,6 +607,7 @@ function KaraokePlayerContent() {
   karaoke.lyrics.forEach((l, i) => {
     if (l.time <= currentTime) activeIdx = i;
   });
+  const cue = isPlaying ? vocalCueDots(karaoke.lyrics, activeIdx, currentTime) : null;
 
   const inPlaylist = !!user && getPlaylists(user.id).some((p) => p.karaokeIds.includes(karaoke.id));
   const reviewCount = getComments(karaoke.id).length;
@@ -591,11 +636,9 @@ function KaraokePlayerContent() {
           </Link>
         ))}
       </div>
-      {!user && (
-        <p className="sm" style={{ opacity: 0.8 }}>
-          {guestLeft > 0
-            ? `Бесплатных прослушиваний осталось: ${guestLeft}`
-            : 'Бесплатные прослушивания закончились'}
+      {!!karaoke.audioUrl && !hasAudio && (
+        <p className="sm" style={{ opacity: 0.72 }}>
+          Аудиозапись сохранена только в браузере автора
         </p>
       )}
     </>
@@ -605,7 +648,7 @@ function KaraokePlayerContent() {
         // On phones these buttons sit in the bottom sheet, which closes after an action. A button
         // that only opens a menu (Скачать ▾) must keep it open, or the menu vanishes with it.
         const btn = event.target instanceof Element ? event.target.closest('button') : null;
-        if (btn && !btn.matches('[aria-haspopup="menu"]') && !btn.closest('.dl-q')) actionsRef.current?.close();
+        if (btn && !btn.matches('[aria-haspopup="menu"]') && !btn.closest('.dl-q') && !btn.closest('.dl-clip')) actionsRef.current?.close();
       }}>
         <button className="bt player-like" aria-pressed={isLiked} aria-label="Лайк" onClick={handleLike}>
           <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
@@ -616,7 +659,7 @@ function KaraokePlayerContent() {
           </span>
         </button>
 
-        <DownloadMenu onPick={handleOpenDownload} karaokeId={karaoke.id} />
+        <DownloadMenu onPick={handleOpenDownload} karaokeId={karaoke.id} duration={duration} lyrics={karaoke.lyrics} />
 
         <button className="bt" aria-pressed={inPlaylist} onClick={handlePlaylist}>
           {inPlaylist ? <ListCheck size={16} aria-hidden="true" /> : <ListPlus size={16} aria-hidden="true" />}
@@ -654,14 +697,6 @@ function KaraokePlayerContent() {
 
   return (
     <>
-      <Tutorial
-        page="player"
-        steps={[
-          { title: 'Плеер', text: 'Строки подсвечиваются в такт музыке. Нажмите на строку, чтобы перейти к ней, или двигайте ползунок.' },
-          { title: 'Автор и исполнитель', text: 'Нажмите на имя автора, чтобы открыть его профиль, или на исполнителя — чтобы увидеть все его песни.' },
-          { title: 'Плейлисты и скачивание', text: 'Сохраняйте караоке в плейлист и скачивайте видео 9:16 или 16:9. Для этого нужен аккаунт.' },
-        ]}
-      />
       <section
         id="player"
         ref={playerRef}
@@ -675,6 +710,7 @@ function KaraokePlayerContent() {
           } as React.CSSProperties
         }
       >
+        {coverBg && <div className="player-aura" style={{ backgroundImage: coverBg }} aria-hidden="true" />}
         {audioSrc && (
           <audio
             ref={audioRef}
@@ -779,17 +815,26 @@ function KaraokePlayerContent() {
         >
           {karaoke.lyrics.map((line, i) => {
             const lineClass = `ln ${i === activeIdx ? 'on' : ''} ${i < activeIdx ? 'pa' : ''}`.trim();
+            const showCue = cue?.targetIdx === i ? cue.lit : 0;
             return (
-              <p
-                key={line.id || i}
-                ref={(el) => {
-                  linesRef.current[i] = el;
-                }}
-                className={lineClass}
-                onClick={() => handleLineClick(line.time)}
-              >
-                <span>{line.text}</span>
-              </p>
+              <React.Fragment key={line.id || i}>
+                {showCue > 0 && (
+                  <div className="cue-dots" aria-hidden="true">
+                    <i className={showCue >= 1 ? 'lit' : ''} />
+                    <i className={showCue >= 2 ? 'lit' : ''} />
+                    <i className={showCue >= 3 ? 'lit' : ''} />
+                  </div>
+                )}
+                <p
+                  ref={(el) => {
+                    linesRef.current[i] = el;
+                  }}
+                  className={lineClass}
+                  onClick={() => handleLineClick(line.time)}
+                >
+                  <span>{line.text}</span>
+                </p>
+              </React.Fragment>
             );
           })}
 

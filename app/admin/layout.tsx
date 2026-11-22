@@ -6,7 +6,6 @@ import { Users, Music, ShieldCheck, BarChart3, Flag, Tags } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
 import SideNav from '@/components/layout/SideNav';
-import Tutorial from '@/components/ui/Tutorial';
 import { db } from '@/lib/firebase';
 
 const ICON = { width: 16, height: 16 };
@@ -50,14 +49,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="shell">
-      <Tutorial
-        page="admin"
-        steps={[
-          { title: 'Панель модерации', text: 'Выберите раздел в боковой панели: пользователи, треки, жалобы, жанры, администраторы или аналитика.' },
-          { title: 'Горизонтальные вкладки', text: 'Внутри раздела вкладки переключают статус: например, предупреждения и баны у пользователей.' },
-          { title: 'Поиск', text: 'Пользователей ищите по нику или тегу (@admin), треки — по названию или автору.' },
-        ]}
-      />
       <SideNav
         title="Администрирование"
         items={[
