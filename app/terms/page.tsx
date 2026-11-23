@@ -13,11 +13,11 @@ const mail = <a href={`mailto:${CONTACT_EMAIL}`} style={LINK}>{CONTACT_EMAIL}</a
 
 export default function TermsPage() {
   return (
-    <div className="pg" style={{ maxWidth: 780 }}>
+    <div className="pg legal-page">
       <h1 className="pg-h">Пользовательское соглашение</h1>
       <p className="pg-sub">Редакция от {LEGAL_DATE}</p>
 
-      <div className="card stack" style={{ lineHeight: 1.65, fontSize: 15 }}>
+      <div className="card legal-sections">
         <section>
           <h2 style={H2}>1. Общие положения</h2>
           <p className="mu" style={{ margin: 0 }}>

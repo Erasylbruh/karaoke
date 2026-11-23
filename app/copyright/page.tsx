@@ -20,13 +20,13 @@ const TEMPLATE = [
 
 export default function CopyrightPage() {
   return (
-    <div className="pg" style={{ maxWidth: 780 }}>
+    <div className="pg legal-page">
       <h1 className="pg-h">Информация для правообладателей</h1>
       <p className="pg-sub">Как сообщить о нарушении авторских и смежных прав и что происходит после жалобы.</p>
 
-      <div className="card stack" style={{ lineHeight: 1.65, fontSize: 15 }}>
+      <div className="card legal-sections">
         <section>
-          <h2 style={H2}>Позиция платформы</h2>
+          <h2 style={H2}>1. Позиция платформы</h2>
           <p className="mu" style={{ margin: 0 }}>
             KaraokeCraft уважает права музыкантов, авторов текстов, издательств и звукозаписывающих компаний. Проекты в каталоге создают и
             загружают пользователи. Получив обоснованное обращение, мы блокируем спорный проект и удаляем его аудио и обложку из хранилища,
@@ -35,7 +35,7 @@ export default function CopyrightPage() {
         </section>
 
         <section>
-          <h2 style={H2}>Как сообщить о нарушении</h2>
+          <h2 style={H2}>2. Как сообщить о нарушении</h2>
           <p className="mu" style={{ margin: '0 0 10px' }}>
             1. <b>Со страницы трека:</b> нажмите «Пожаловаться», выберите «Нарушение авторских прав» и укажите ссылку на официальный релиз или
             подтверждение прав. Нужен вход в аккаунт; сайт сразу подтвердит получение жалобы.
@@ -54,7 +54,7 @@ export default function CopyrightPage() {
         </section>
 
         <section>
-          <h2 style={H2}>Что происходит дальше</h2>
+          <h2 style={H2}>3. Что происходит дальше</h2>
           <p className="mu" style={{ margin: 0 }}>
             Мы рассматриваем обращение и даём мотивированный ответ не позднее {COMPLAINT_ANSWER_DAYS} календарных дней. Если нарушение
             подтверждается, проект блокируется или удаляется, его аудио, обложка и шрифт удаляются из хранилища, а автор получает
@@ -64,7 +64,7 @@ export default function CopyrightPage() {
         </section>
 
         <section>
-          <h2 style={H2}>Если ваш проект удалили по ошибке</h2>
+          <h2 style={H2}>4. Если ваш проект удалили по ошибке</h2>
           <p className="mu" style={{ margin: 0 }}>
             Напишите на <a href={`mailto:${CONTACT_EMAIL}`} style={LINK}>{CONTACT_EMAIL}</a> и объясните, на каком основании вы использовали
             материал (лицензия, разрешение правообладателя, собственное произведение). Если претензия не подтвердится, проект можно будет
